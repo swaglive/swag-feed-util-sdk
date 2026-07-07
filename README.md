@@ -6,15 +6,16 @@ Livestream feed SDK for external integration.
 > Swag's internal monorepo; this repo is force-synced each release. PRs here are
 > overwritten.
 
-Packages:
+Two host types, two forms:
 
-- **`feed_util/`** — the SDK you consume (`LivestreamSdk` interface + models).
-  - **`feed_util/example/`** — a runnable demo app (`flutter run`) showing the
-    feed grid, pull-to-refresh, load-more, and cover images.
-- **`livestream_sdk_core/`** — its domain-tracker dependency (resolved
-  automatically via a sibling path; you don't declare it).
+| Your host | Use |
+| --- | --- |
+| **iOS — Flutter** | the `feed_util/` Dart package (git dependency) |
+| **Android — Java** | the release AAR + facade in `android/` |
 
-## Flutter integration
+---
+
+## Flutter (iOS) host
 
 ```yaml
 # your app's pubspec.yaml
@@ -23,34 +24,61 @@ dependencies:
     git:
       url: https://github.com/swaglive/swag-feed-util-sdk.git
       path: feed_util
-      ref: v0.1.0        # pin a tag
+      ref: v0.2.0        # pin a tag
 ```
 
 ```dart
 import 'package:feed_util/feed_util.dart';
 
 final sdk = LivestreamSdk(
-  const LivestreamSdkConfig(trackerServers: ['<tracker hosts from Swag>']),
+  const LivestreamSdkConfig(
+    trackerServers: ['<tracker hosts from Swag>'],
+    trackerAuthToken: '<token from Swag>',
+  ),
 );
 final page = await sdk.getLivestreamList('user_livestream-v2');
 // page.items / page.nextToken (load-more) / sdk.getCoverImage(id) /
 // sdk.buildLivestreamUrl(id)
 ```
 
-**Tracker auth token** (needed for live data): bake it with
-`flutter build --dart-define=FEED_UTIL_TRACKER_AUTH_TOKEN=<token>`, or pass it at
-runtime via `LivestreamSdkConfig.trackerAuthToken`. Ask your Swag contact for
-the token and tracker hosts.
+Runnable demo: `cd feed_util/example && flutter pub get && flutter run`.
 
-## Run the example
+## Android (Java) host
+
+The `android/` folder is a self-contained delivery:
+
+- `android/aar-repo/` — the **release** AAR (a local Maven repo) your build
+  resolves against; committed here so you get it by cloning.
+- `android/feed-util-facade/` — the `FeedUtil` Kotlin facade to include in your
+  host (channel glue; no business logic).
+- `android/example/` — a runnable Java host demo, already wired to the two above.
+
+Run the demo (Android Studio, or):
 
 ```sh
-cd feed_util/example
-flutter pub get
-flutter run --dart-define=FEED_UTIL_TRACKER_AUTH_TOKEN=<token>
+cd android/example && ./gradlew :app:installRelease
 ```
 
-## Android (native) hosts
+Wiring your own host (see `android/example` for the full version):
 
-Native Android hosts don't use this Dart package — they embed the release
-**AAR** + the `FeedUtil` Kotlin facade. Ask your Swag contact for those.
+```kotlin
+// settings.gradle.kts
+maven(url = file("<path to>/android/aar-repo"))
+maven(url = "https://storage.googleapis.com/download.flutter.io") // engine artifacts (network)
+
+// app/build.gradle.kts
+implementation("com.example.feed_util:flutter_release:1.0")
+// + include android/feed-util-facade/src/main/kotlin
+```
+
+```java
+FeedUtil.start(context);                         // warm the engine at launch
+Map<String,Object> cfg = new HashMap<>();
+cfg.put("trackerServers", trackerServers);
+cfg.put("trackerAuthToken", token);              // AAR has no baked token
+FeedUtil.invoke("configure", cfg, result);       // then getLivestreamList, ...
+```
+
+**Tracker token / hosts** come from Swag. The AAR carries **no** baked token —
+pass `trackerAuthToken` at runtime in `configure` (Android) or via
+`LivestreamSdkConfig` (Flutter).

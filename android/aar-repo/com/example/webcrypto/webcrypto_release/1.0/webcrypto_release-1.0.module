@@ -1,0 +1,123 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "com.example.webcrypto",
+    "module": "webcrypto_release",
+    "version": "1.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.14"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "io.flutter",
+          "module": "flutter_embedding_release",
+          "version": {
+            "requires": "1.0.0-425cfb54d01a9472b3e81d9e76fd63a4a44cfbcb"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "webcrypto_release-1.0.aar",
+          "url": "webcrypto_release-1.0.aar",
+          "size": 810588,
+          "sha512": "10e9514aa8e7de4ec8afceda3cfd25cb93f46ef128885d77489f6b4b4e39f09d183f2e09ff5a10bcdffb2cb8ea58693337ca0f3fb7ceade96fc023dcd420b51c",
+          "sha256": "dd750659b76f9fea43b0708ad240ac2d7a1830a7718ae9eb17a08a008c18aa58",
+          "sha1": "33f3696c13fde27a5a1ef9947efd20b20be0ecc0",
+          "md5": "2a77602ef7e907ad7a27b506f3a341df"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "io.flutter",
+          "module": "flutter_embedding_release",
+          "version": {
+            "requires": "1.0.0-425cfb54d01a9472b3e81d9e76fd63a4a44cfbcb"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib-jdk7",
+          "version": {
+            "requires": "1.6.10"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "webcrypto_release-1.0.aar",
+          "url": "webcrypto_release-1.0.aar",
+          "size": 810588,
+          "sha512": "10e9514aa8e7de4ec8afceda3cfd25cb93f46ef128885d77489f6b4b4e39f09d183f2e09ff5a10bcdffb2cb8ea58693337ca0f3fb7ceade96fc023dcd420b51c",
+          "sha256": "dd750659b76f9fea43b0708ad240ac2d7a1830a7718ae9eb17a08a008c18aa58",
+          "sha1": "33f3696c13fde27a5a1ef9947efd20b20be0ecc0",
+          "md5": "2a77602ef7e907ad7a27b506f3a341df"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseSourcePublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "sources",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "webcrypto_release-1.0-sources.jar",
+          "url": "webcrypto_release-1.0-sources.jar",
+          "size": 1583,
+          "sha512": "5acebea3bc34a8795d1d452513e14a1fb15567deb1f83796190cf116e041774005bdff726d2c9cc5d96a59bd7f2ef84b8bb5a2c16432b3bc5b9c76b7d2d5ad49",
+          "sha256": "708cde51bf2ef410cf924c983280eae519c1c732de1f8d4092e554891f1e3b7f",
+          "sha1": "b2c2aede8fde0bcf855642452144dcd30ba240ce",
+          "md5": "c5aabaa587cac7cb50c95bbeeb1dca0f"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseJavaDocPublication",
+      "attributes": {
+        "org.gradle.category": "documentation",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.docstype": "javadoc",
+        "org.gradle.usage": "java-runtime"
+      },
+      "files": [
+        {
+          "name": "webcrypto_release-1.0-javadoc.jar",
+          "url": "webcrypto_release-1.0-javadoc.jar",
+          "size": 262189,
+          "sha512": "4262db4e5938e3fb54d579e2e1d67a5056641e7ec5b9103ce17ec8fa5c4fab3693b07d314799b2628b3fe6704597554a05a18ac47f1c561d6d7962f5fab8c8f9",
+          "sha256": "8f7b7d11bbdf4b63d4eb8374def1bf7b7e6f8abf000f1f0d899a760a3ad8a8a5",
+          "sha1": "8723c82351339a0ab2cfe5eb6aa2cf808023860f",
+          "md5": "6c81bd9855512d6743bdd600e6b08a04"
+        }
+      ]
+    }
+  ]
+}
