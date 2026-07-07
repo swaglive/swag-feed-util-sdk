@@ -1,0 +1,30 @@
+# Dir is examples/flutter (matches android/ios); the pub package name can't be
+# the literal `flutter` — that collides with the Flutter SDK package.
+name: feed_util_flutter_example
+description: "Example external Flutter app consuming the feed_util Livestream SDK as a Dart package."
+publish_to: 'none'
+version: 1.0.0+1
+
+# Part of the swag-flutter-user pub workspace (root pubspec `workspace:` list),
+# so `feed_util: any` resolves to the local module. A real external consumer
+# instead uses a git or published dependency — see feed_util/INTEGRATION.md.
+
+environment:
+  sdk: ^3.8.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # The SDK under test, resolved to the local workspace member.
+  feed_util:
+    path: ../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
