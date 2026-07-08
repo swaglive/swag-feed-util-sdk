@@ -54,11 +54,17 @@ The `android/` folder is a self-contained delivery:
 You add **one dependency** (`feed-util`); Gradle pulls the Flutter module
 transitively — no source to copy, no separate Flutter AAR to declare.
 
-Run the demo (Android Studio, or):
+Run the demo — first put your tracker token in
+`android/example/local.properties` (gitignored), then build:
 
 ```sh
+echo "feedUtilTrackerAuthToken=<token from Swag>" >> android/example/local.properties
 cd android/example && ./gradlew :app:installRelease
 ```
+
+Without the token the feed errors with `domain_tracker_server_not_found`
+(the AAR bakes no token; the host supplies it at runtime). Your own host
+passes it in the `configure` call — see the `trackerAuthToken` line below.
 
 Wiring your own host — pull it **remotely via Gradle**, no clone needed (this
 repo's `android/aar-repo/` is a valid Maven layout served over HTTP):
@@ -69,7 +75,7 @@ dependencyResolutionManagement {
     repositories {
         google(); mavenCentral()
         // The SDK's committed Maven repo, straight off GitHub (public repo).
-        maven(url = uri("https://raw.githubusercontent.com/swaglive/swag-feed-util-sdk/v0.3.0/android/aar-repo"))
+        maven(url = uri("https://raw.githubusercontent.com/swaglive/swag-feed-util-sdk/v0.3.1/android/aar-repo"))
         // Flutter engine artifacts referenced by the AAR poms.
         maven(url = "https://storage.googleapis.com/download.flutter.io")
     }

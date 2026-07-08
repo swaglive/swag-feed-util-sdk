@@ -126,6 +126,12 @@ public class MainActivity extends Activity {
     private void configureThenLoad() {
         Map<String, Object> config = new HashMap<>();
         config.put("trackerServers", TRACKER_SERVERS);
+        // Runtime tracker token (the AAR bakes none) — from local.properties via
+        // BuildConfig. Omitted when empty so a misconfigured build fails loudly
+        // as domain_tracker_server_not_found rather than sending a blank token.
+        if (!BuildConfig.TRACKER_AUTH_TOKEN.isEmpty()) {
+            config.put("trackerAuthToken", BuildConfig.TRACKER_AUTH_TOKEN);
+        }
         FeedUtil.invoke("configure", config, new MethodChannel.Result() {
             @Override public void success(Object result) { loadFeed(null); }
             @Override public void error(String code, String message, Object details) {

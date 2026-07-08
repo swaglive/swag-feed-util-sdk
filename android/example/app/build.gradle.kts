@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -9,12 +10,29 @@ android {
     namespace = "live.swag.feedutil.example"
     compileSdk = 36
 
+    buildFeatures { buildConfig = true }
+
     defaultConfig {
         applicationId = "live.swag.feedutil.example"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        // The shipped AAR bakes no tracker token, so the host supplies it at
+        // runtime. Put `feedUtilTrackerAuthToken=<token from Swag>` in
+        // local.properties (gitignored); empty means unauthenticated, which
+        // the tracker rejects with domain_tracker_server_not_found.
+        val trackerProps = Properties()
+        val localProps = rootProject.file("local.properties")
+        if (localProps.exists()) {
+            localProps.inputStream().use { trackerProps.load(it) }
+        }
+        buildConfigField(
+            "String",
+            "TRACKER_AUTH_TOKEN",
+            "\"${trackerProps.getProperty("feedUtilTrackerAuthToken", "")}\"",
+        )
     }
 
     compileOptions {
