@@ -59,17 +59,30 @@ Run the demo (Android Studio, or):
 cd android/example && ./gradlew :app:installRelease
 ```
 
-Wiring your own host (see `android/example` for the full version):
+Wiring your own host — pull the AAR **remotely via Gradle**, no clone needed
+(this repo's `android/aar-repo/` is a valid Maven layout served over HTTP):
 
 ```kotlin
 // settings.gradle.kts
-maven(url = file("<path to>/android/aar-repo"))
-maven(url = "https://storage.googleapis.com/download.flutter.io") // engine artifacts (network)
+dependencyResolutionManagement {
+    repositories {
+        google(); mavenCentral()
+        // The SDK's committed Maven repo, straight off GitHub (public repo).
+        maven(url = uri("https://raw.githubusercontent.com/swaglive/swag-feed-util-sdk/v0.2.0/android/aar-repo"))
+        // Flutter engine artifacts referenced by the AAR poms.
+        maven(url = "https://storage.googleapis.com/download.flutter.io")
+    }
+}
 
 // app/build.gradle.kts
-implementation("com.example.feed_util:flutter_release:1.0")
-// + include android/feed-util-facade/src/main/kotlin
+dependencies { implementation("com.example.feed_util:flutter_release:1.0") }
+// + include the facade source:
+//   sourceSets["main"].kotlin.srcDir("<path>/android/feed-util-facade/src/main/kotlin")
 ```
+
+(Alternatively clone the repo and point at the local dir:
+`maven(url = file("<path>/android/aar-repo"))` — that's what `android/example`
+uses so it runs straight after cloning.)
 
 ```java
 FeedUtil.start(context);                         // warm the engine at launch
