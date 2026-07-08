@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Required for the SDK's network calls. Flutter's DEBUG AAR injects this
+         automatically, but the RELEASE AAR does not — without it a release
+         build has no network and the feed fails with
+         domain_tracker_server_not_found. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".ExampleApp"
         android:label="FeedUtil Example"
