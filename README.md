@@ -24,7 +24,7 @@ dependencies:
     git:
       url: https://github.com/swaglive/swag-feed-util-sdk.git
       path: feed_util
-      ref: v0.2.0        # pin a tag
+      ref: v0.3.1        # pin a tag
 ```
 
 ```dart
