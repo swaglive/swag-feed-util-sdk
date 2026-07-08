@@ -47,11 +47,12 @@ Runnable demo: `cd feed_util/example && flutter pub get && flutter run`.
 
 The `android/` folder is a self-contained delivery:
 
-- `android/aar-repo/` — the **release** AAR (a local Maven repo) your build
-  resolves against; committed here so you get it by cloning.
-- `android/feed-util-facade/` — the `FeedUtil` Kotlin facade to include in your
-  host (channel glue; no business logic).
-- `android/example/` — a runnable Java host demo, already wired to the two above.
+- `android/aar-repo/` — a **release** Maven repo holding the `FeedUtil` facade
+  AAR (`live.swag.feedutil:feed-util`) + the Flutter module AAR it depends on.
+- `android/example/` — a runnable Java host demo, already wired to it.
+
+You add **one dependency** (`feed-util`); Gradle pulls the Flutter module
+transitively — no source to copy, no separate Flutter AAR to declare.
 
 Run the demo (Android Studio, or):
 
@@ -59,8 +60,8 @@ Run the demo (Android Studio, or):
 cd android/example && ./gradlew :app:installRelease
 ```
 
-Wiring your own host — pull the AAR **remotely via Gradle**, no clone needed
-(this repo's `android/aar-repo/` is a valid Maven layout served over HTTP):
+Wiring your own host — pull it **remotely via Gradle**, no clone needed (this
+repo's `android/aar-repo/` is a valid Maven layout served over HTTP):
 
 ```kotlin
 // settings.gradle.kts
@@ -68,16 +69,14 @@ dependencyResolutionManagement {
     repositories {
         google(); mavenCentral()
         // The SDK's committed Maven repo, straight off GitHub (public repo).
-        maven(url = uri("https://raw.githubusercontent.com/swaglive/swag-feed-util-sdk/v0.2.0/android/aar-repo"))
+        maven(url = uri("https://raw.githubusercontent.com/swaglive/swag-feed-util-sdk/v0.3.0/android/aar-repo"))
         // Flutter engine artifacts referenced by the AAR poms.
         maven(url = "https://storage.googleapis.com/download.flutter.io")
     }
 }
 
-// app/build.gradle.kts
-dependencies { implementation("com.example.feed_util:flutter_release:1.0") }
-// + include the facade source:
-//   sourceSets["main"].kotlin.srcDir("<path>/android/feed-util-facade/src/main/kotlin")
+// app/build.gradle.kts — one coordinate pulls the Flutter module transitively
+dependencies { implementation("live.swag.feedutil:feed-util:1.0") }
 ```
 
 (Alternatively clone the repo and point at the local dir:

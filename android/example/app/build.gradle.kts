@@ -22,14 +22,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    sourceSets {
-        // Compile the module's native wrapper directly so it stays
-        // single-sourced (mirrors the iOS example referencing FeedUtil.swift).
-        getByName("main") {
-            kotlin.srcDir("../../feed-util-facade/src/main/kotlin")
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -47,7 +39,7 @@ kotlin {
 
 dependencies {
     // AARs from `flutter build aar` — see settings.gradle.kts repositories.
-    implementation("com.example.feed_util:flutter_release:1.0")
+    implementation("live.swag.feedutil:feed-util:1.0")
 
     // Pull-to-refresh for the demo feed (AndroidX; android.useAndroidX=true).
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")

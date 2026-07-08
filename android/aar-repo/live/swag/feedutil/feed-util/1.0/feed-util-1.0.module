@@ -1,0 +1,90 @@
+{
+  "formatVersion": "1.1",
+  "component": {
+    "group": "live.swag.feedutil",
+    "module": "feed-util",
+    "version": "1.0",
+    "attributes": {
+      "org.gradle.status": "release"
+    }
+  },
+  "createdBy": {
+    "gradle": {
+      "version": "8.14"
+    }
+  },
+  "variants": [
+    {
+      "name": "releaseVariantReleaseApiPublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-api"
+      },
+      "dependencies": [
+        {
+          "group": "com.example.feed_util",
+          "module": "flutter_release",
+          "version": {
+            "requires": "1.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "feed-util-1.0.aar",
+          "url": "feed-util-1.0.aar",
+          "size": 3572,
+          "sha512": "0fae226b88a9bf27ced13d605c91b46a0de8cf5e6fd3fcb88fa164ae468b72c4455e75825d16e1b0c905d4e89df580a7bd03fbf38d4b2c73a259e2b3ff6cea10",
+          "sha256": "927d88f14633880b497ed2a30f1efc9da7313556853155053b3407e4886bba78",
+          "sha1": "4f26fbd4825f618f8da35a1d1022d9876c1e07de",
+          "md5": "8f96895332f20b88424f581e1b35e70a"
+        }
+      ]
+    },
+    {
+      "name": "releaseVariantReleaseRuntimePublication",
+      "attributes": {
+        "org.gradle.category": "library",
+        "org.gradle.dependency.bundling": "external",
+        "org.gradle.libraryelements": "aar",
+        "org.gradle.usage": "java-runtime"
+      },
+      "dependencies": [
+        {
+          "group": "com.example.feed_util",
+          "module": "flutter_release",
+          "version": {
+            "requires": "1.0"
+          }
+        },
+        {
+          "group": "org.jetbrains.kotlin",
+          "module": "kotlin-stdlib",
+          "version": {
+            "requires": "2.2.20"
+          }
+        }
+      ],
+      "files": [
+        {
+          "name": "feed-util-1.0.aar",
+          "url": "feed-util-1.0.aar",
+          "size": 3572,
+          "sha512": "0fae226b88a9bf27ced13d605c91b46a0de8cf5e6fd3fcb88fa164ae468b72c4455e75825d16e1b0c905d4e89df580a7bd03fbf38d4b2c73a259e2b3ff6cea10",
+          "sha256": "927d88f14633880b497ed2a30f1efc9da7313556853155053b3407e4886bba78",
+          "sha1": "4f26fbd4825f618f8da35a1d1022d9876c1e07de",
+          "md5": "8f96895332f20b88424f581e1b35e70a"
+        }
+      ]
+    }
+  ]
+}
