@@ -62,8 +62,22 @@ class _FeedPageState extends State<FeedPage> {
   @override
   void initState() {
     super.initState();
+    // Surface the SDK's diagnostic logs (domain-tracker stages, feed/cover API
+    // stages, errors) to the console so the demo doubles as a debugging aid.
+    _sdk.setLogListener(_printLog);
     _refresh();
   }
+
+  @override
+  void dispose() {
+    _sdk.setLogListener(null);
+    super.dispose();
+  }
+
+  /// Prints each SDK [LogEntry] with its severity. `debugPrint` throttles high
+  /// volume and is stripped from release builds.
+  static void _printLog(LogEntry entry) =>
+      debugPrint('[feed_util][${entry.severity.name}] ${entry.message}');
 
   Future<void> _refresh() async {
     setState(() {

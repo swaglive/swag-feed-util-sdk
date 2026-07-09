@@ -23,26 +23,30 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
-import io.flutter.plugin.common.MethodChannel;
+import live.swag.feedutil.CompletionCallback;
 import live.swag.feedutil.FeedUtil;
+import live.swag.feedutil.FeedUtilException;
+import live.swag.feedutil.LivestreamItem;
+import live.swag.feedutil.LivestreamPage;
+import live.swag.feedutil.LivestreamSdkConfig;
+import live.swag.feedutil.ResultCallback;
 
 /**
- * Java host demo: configures the SDK, fetches the livestream feed over the
- * MethodChannel, and renders real feed metadata as cards. Cover images are
- * fetched lazily per card via {@code getCoverImage} (decrypted on the Dart
- * side) over a colored placeholder. UI modeled on the in-app livestream tab
- * card. Colors are hard-coded (an example app has no design tokens).
+ * Java host demo: configures the SDK, fetches the livestream feed, and renders
+ * real feed metadata as cards. Everything goes through the typed {@link FeedUtil}
+ * API — no MethodChannel, no map parsing; results arrive as {@link LivestreamPage}
+ * / {@link LivestreamItem} on the main thread. Cover images are fetched lazily per
+ * card via {@code getCoverImage} (decrypted on the Dart side) over a colored
+ * placeholder. UI modeled on the in-app livestream tab card. Colors are
+ * hard-coded (an example app has no design tokens).
  */
 public class MainActivity extends Activity {
 
@@ -59,8 +63,7 @@ public class MainActivity extends Activity {
     private SwipeRefreshLayout swipe;
     private ScrollView scroll;
     private int cellWidth;
-    private String frontendBase; // cached from resolvedFrontendBase for tap URLs
-    private String nextToken;    // opaque PageToken for load-more; null = no more pages
+    private String nextToken;    // opaque page cursor for load-more; null = no more pages
     private boolean loadingMore; // guards against firing load-more repeatedly while scrolling
     // Off-UI-thread cover decoding so BitmapFactory work doesn't jank scrolling.
     private final ExecutorService coverExecutor = Executors.newFixedThreadPool(2);
@@ -123,50 +126,42 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    // --- SDK calls over the MethodChannel -------------------------------------
+    // --- SDK calls via the typed FeedUtil API ---------------------------------
 
     private void configureThenLoad() {
-        Map<String, Object> config = new HashMap<>();
-        config.put("trackerServers", TRACKER_SERVERS);
         // Runtime tracker token (the AAR bakes none) — from local.properties via
         // BuildConfig. Omitted when empty so a misconfigured build fails loudly
         // as domain_tracker_server_not_found rather than sending a blank token.
-        if (!BuildConfig.TRACKER_AUTH_TOKEN.isEmpty()) {
-            config.put("trackerAuthToken", BuildConfig.TRACKER_AUTH_TOKEN);
-        }
-        FeedUtil.invoke("configure", config, new MethodChannel.Result() {
-            @Override public void success(Object result) { loadFeed(null); }
-            @Override public void error(String code, String message, Object details) {
+        LivestreamSdkConfig config = BuildConfig.TRACKER_AUTH_TOKEN.isEmpty()
+                ? new LivestreamSdkConfig(TRACKER_SERVERS)
+                : new LivestreamSdkConfig(TRACKER_SERVERS, BuildConfig.TRACKER_AUTH_TOKEN);
+        FeedUtil.configure(config, new CompletionCallback() {
+            @Override public void onSuccess() { loadFeed(null); }
+            @Override public void onError(FeedUtilException e) {
                 // configure is call-once; a re-created Activity is fine to proceed.
-                if ("already_configured".equals(code)) loadFeed(null);
-                else fail(code + ": " + message);
+                if ("already_configured".equals(e.getCode())) loadFeed(null);
+                else fail(e.getCode() + ": " + e.getMessage());
             }
-            @Override public void notImplemented() { fail("engine not ready"); }
-        });
-        // Cache the frontend base so card taps can build the web-view URL.
-        FeedUtil.invoke("resolvedFrontendBase", null, new MethodChannel.Result() {
-            @Override public void success(Object result) { frontendBase = (String) result; }
-            @Override public void error(String c, String m, Object d) { }
-            @Override public void notImplemented() { }
         });
     }
 
     /**
-     * Fetches one feed page. {@code pageToken == null} loads page 1 and
-     * replaces the grid; a non-null token appends the next page (load-more).
+     * Fetches one feed page. {@code pageToken == null} loads page 1 and replaces
+     * the grid; a non-null token appends the next page (load-more).
      */
     private void loadFeed(final String pageToken) {
         final boolean append = pageToken != null;
-        Map<String, Object> args = new HashMap<>();
-        args.put("feedId", FEED_ID);
-        if (append) args.put("pageToken", pageToken);
-        FeedUtil.invoke("getLivestreamList", args, new MethodChannel.Result() {
-            @Override public void success(Object result) { onFeed((Map<?, ?>) result, append); }
-            @Override public void error(String code, String message, Object details) {
-                fail(code + ": " + message);
+        ResultCallback<LivestreamPage> callback = new ResultCallback<LivestreamPage>() {
+            @Override public void onSuccess(LivestreamPage page) { onFeed(page, append); }
+            @Override public void onError(FeedUtilException e) {
+                fail(e.getCode() + ": " + e.getMessage());
             }
-            @Override public void notImplemented() { fail("getLivestreamList not implemented"); }
-        });
+        };
+        if (append) {
+            FeedUtil.getLivestreamList(FEED_ID, pageToken, callback);
+        } else {
+            FeedUtil.getLivestreamList(FEED_ID, callback);
+        }
     }
 
     /** Loads the next page once the user scrolls within one screen of the end. */
@@ -181,15 +176,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private void onFeed(Map<?, ?> page, boolean append) {
+    private void onFeed(LivestreamPage page, boolean append) {
         swipe.setRefreshing(false);
         loadingMore = false;
-        Object token = page.get("nextToken");
-        nextToken = token == null ? null : token.toString();
+        nextToken = page.getNextToken();
 
-        List<?> items = (List<?>) page.get("items");
-        if (items == null || items.isEmpty()) {
+        List<LivestreamItem> items = page.getItems();
+        if (items.isEmpty()) {
             if (!append) {
                 statusView.setVisibility(View.VISIBLE);
                 statusView.setText("No livestreams.");
@@ -199,8 +192,8 @@ public class MainActivity extends Activity {
         }
         statusView.setVisibility(View.GONE);
         if (!append) grid.removeAllViews();
-        for (Object raw : items) {
-            grid.addView(buildCard((Map<String, Object>) raw));
+        for (LivestreamItem item : items) {
+            grid.addView(buildCard(item));
         }
     }
 
@@ -213,12 +206,12 @@ public class MainActivity extends Activity {
 
     // --- Card view ------------------------------------------------------------
 
-    private View buildCard(Map<String, Object> item) {
-        String id = str(item, "id");
-        String username = str(item, "username");
-        String displayName = str(item, "displayName");
-        String title = str(item, "title");
-        String countryFlag = str(item, "countryFlag");
+    private View buildCard(LivestreamItem item) {
+        String id = item.getId();
+        String username = item.getUsername();
+        String displayName = item.getDisplayName();
+        String title = item.getTitle();
+        String countryFlag = item.getCountryFlag();
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -251,7 +244,7 @@ public class MainActivity extends Activity {
         // the placeholder in place.
         loadCover(id, cover, initial);
 
-        String[] status = statusLabelColor(str(item, "status"), item);
+        String[] status = statusLabelColor(item);
         if (status != null) {
             cover.addView(pill(status[0], (int) Long.parseLong(status[1], 16)),
                     overlayLp(Gravity.TOP | Gravity.END));
@@ -260,13 +253,13 @@ public class MainActivity extends Activity {
         if (badge != null) {
             cover.addView(pill(badge, badgeColor(item)), overlayLp(Gravity.TOP | Gravity.START));
         }
-        cover.addView(pill(viewerText(num(item, "viewers")), 0xB3000000),
+        cover.addView(pill(viewerText(item.getViewers()), 0xB3000000),
                 overlayLp(Gravity.BOTTOM | Gravity.START));
-        double score = dbl(item, "score");
+        double score = item.getScore() != null ? item.getScore() : 0;
         if (score > 0) {
             // Design: {flag} ★ {score} ({reviewCount}) at bottom-right.
             String flagPrefix = (countryFlag == null || countryFlag.isEmpty()) ? "" : countryFlag + " ";
-            int reviews = num(item, "reviewCount");
+            int reviews = item.getReviewCount();
             String reviewSuffix = reviews > 0 ? " (" + viewerText(reviews) + ")" : "";
             cover.addView(
                     pill(flagPrefix + "★ " + String.format("%.1f", score) + reviewSuffix, 0xB3000000),
@@ -292,41 +285,38 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    /**
+     * Builds the livestream web-view URL via the SDK and opens it in an in-app
+     * Chrome Custom Tab. Falls back to surfacing the URL if the device has no
+     * browser/handler so the demo never crashes.
+     */
     private void openUrl(String id) {
-        if (frontendBase == null) {
-            Toast.makeText(this, "frontend base not resolved yet", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        // Mirrors LivestreamSdk.buildLivestreamUrl: {frontend}/user/{id}/livestream
-        String url = frontendBase
-                + (frontendBase.endsWith("/") ? "" : "/")
-                + "user/" + Uri.encode(id) + "/livestream";
-        // Open the livestream web page in an in-app Chrome Custom Tab. Falls
-        // back to surfacing the URL if the device has no browser/handler
-        // (launchUrl throws ActivityNotFoundException) so the demo never crashes.
-        try {
-            new CustomTabsIntent.Builder().build().launchUrl(this, Uri.parse(url));
-        } catch (ActivityNotFoundException e) {
-            Toast.makeText(this, url, Toast.LENGTH_LONG).show();
-        }
+        FeedUtil.buildLivestreamUrl(id, new ResultCallback<String>() {
+            @Override public void onSuccess(String url) {
+                try {
+                    new CustomTabsIntent.Builder().build().launchUrl(MainActivity.this, Uri.parse(url));
+                } catch (ActivityNotFoundException e) {
+                    Toast.makeText(MainActivity.this, url, Toast.LENGTH_LONG).show();
+                }
+            }
+            @Override public void onError(FeedUtilException e) {
+                Toast.makeText(MainActivity.this, "URL unavailable: " + e.getMessage(),
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
     }
 
     /**
-     * Requests the decrypted cover for {@code id} over the channel. The reply is
-     * a {@code Uint8List}, which the standard codec delivers as a {@code byte[]}.
-     * On success it decodes to a bitmap and slots an ImageView behind the
-     * overlays (index 0), hiding the placeholder letter. The channel callback
-     * lands on the UI thread, so the decode is pushed to {@link #coverExecutor}
-     * and only the view updates run back on the UI thread.
+     * Requests the decrypted cover for {@code id} via the SDK ({@code byte[]}, or
+     * null when the stream has no cover). On success it decodes to a bitmap and
+     * slots an ImageView behind the overlays (index 0), hiding the placeholder
+     * letter. The callback lands on the UI thread, so the decode is pushed to
+     * {@link #coverExecutor} and only the view updates run back on the UI thread.
      */
     private void loadCover(String id, FrameLayout cover, TextView initial) {
-        Map<String, Object> args = new HashMap<>();
-        args.put("livestreamId", id);
-        FeedUtil.invoke("getCoverImage", args, new MethodChannel.Result() {
-            @Override public void success(Object result) {
-                if (!(result instanceof byte[])) return; // null = no cover
-                final byte[] bytes = (byte[]) result;
-                if (bytes.length == 0) return;
+        FeedUtil.getCoverImage(id, new ResultCallback<byte[]>() {
+            @Override public void onSuccess(byte[] bytes) {
+                if (bytes == null || bytes.length == 0) return; // no cover
                 coverExecutor.execute(() -> {
                     final Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
                     if (bitmap == null) return;
@@ -341,8 +331,7 @@ public class MainActivity extends Activity {
                     });
                 });
             }
-            @Override public void error(String c, String m, Object d) { }
-            @Override public void notImplemented() { }
+            @Override public void onError(FeedUtilException e) { }
         });
     }
 
@@ -369,30 +358,31 @@ public class MainActivity extends Activity {
         return lp;
     }
 
-    /** status name -> {label, hex-argb-without-0x}; null hides the pill. */
-    private String[] statusLabelColor(String status, Map<String, Object> item) {
-        if (status == null) return null;
-        switch (status) {
-            case "free": return new String[]{"免費直播中", "CC000000"};
-            case "performing": return new String[]{"表演中", "FF7C4DFF"};
-            case "funding":
-                int remaining = num(item, "fundingTarget") - num(item, "fundingProgress");
+    /** status -> {label, hex-argb-without-0x}; null hides the pill. */
+    private String[] statusLabelColor(LivestreamItem item) {
+        switch (item.getStatus()) {
+            case FREE: return new String[]{"免費直播中", "CC000000"};
+            case PERFORMING: return new String[]{"表演中", "FF7C4DFF"};
+            case FUNDING:
+                int target = item.getFundingTarget() != null ? item.getFundingTarget() : 0;
+                int progress = item.getFundingProgress() != null ? item.getFundingProgress() : 0;
+                int remaining = target - progress;
                 return new String[]{remaining > 0 ? "剩 " + remaining + " 張" : "募資中", "FF7C4DFF"};
-            case "exclusive": return new String[]{"獨家", "FF3A6DE0"};
-            default: return null; // offline
+            case EXCLUSIVE: return new String[]{"獨家", "FF3A6DE0"};
+            default: return null; // OFFLINE / UNKNOWN
         }
     }
 
-    private String topLeftBadge(Map<String, Object> item) {
-        if (bool(item, "isVipSponsor")) return "VIP";
-        if (bool(item, "isNewbie")) return "NEW";
-        if (bool(item, "hasToy")) return "TOY";
+    private String topLeftBadge(LivestreamItem item) {
+        if (item.isVipSponsor()) return "VIP";
+        if (item.isNewbie()) return "NEW";
+        if (item.hasToy()) return "TOY";
         return null;
     }
 
-    private int badgeColor(Map<String, Object> item) {
-        if (bool(item, "isVipSponsor")) return 0xFFB8860B;
-        if (bool(item, "isNewbie")) return 0xFF2E7D32;
+    private int badgeColor(LivestreamItem item) {
+        if (item.isVipSponsor()) return 0xFFB8860B;
+        if (item.isNewbie()) return 0xFF2E7D32;
         return 0xFFAD1457;
     }
 
@@ -403,25 +393,6 @@ public class MainActivity extends Activity {
     private int placeholderColor(String id) {
         float hue = Math.abs(id.hashCode() % 360);
         return Color.HSVToColor(new float[]{hue, 0.35f, 0.30f});
-    }
-
-    private static String str(Map<String, Object> m, String key) {
-        Object v = m.get(key);
-        return v == null ? null : v.toString();
-    }
-
-    private static int num(Map<String, Object> m, String key) {
-        Object v = m.get(key);
-        return v instanceof Number ? ((Number) v).intValue() : 0;
-    }
-
-    private static double dbl(Map<String, Object> m, String key) {
-        Object v = m.get(key);
-        return v instanceof Number ? ((Number) v).doubleValue() : 0;
-    }
-
-    private static boolean bool(Map<String, Object> m, String key) {
-        return Boolean.TRUE.equals(m.get(key));
     }
 
     private int dp(int value) {

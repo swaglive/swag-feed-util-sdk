@@ -13,7 +13,7 @@ android {
     buildFeatures { buildConfig = true }
 
     defaultConfig {
-        applicationId = "live.swag.feedutil.example"
+        applicationId = "com.example.feedutil.demo"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -53,6 +53,12 @@ kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
     }
+}
+
+// Names the built artifact: FeedUtilExample-<buildType>.apk (default was
+// app-<buildType>.apk). The "-<buildType>" suffix is still appended by AGP.
+base {
+    archivesName = "FeedUtilExample"
 }
 
 dependencies {
