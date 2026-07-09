@@ -47,11 +47,18 @@ class Livestream {
     schedule: schedule,
   );
 
-  /// Card status (spec §05). Ordering matches the app's `itemType`:
-  /// exclusive → show → private → funding → public, else offline.
+  /// Card status (spec §05).
+  ///
+  /// The backend's `/sessions` `mode` (BE API GENP-3379) is authoritative and
+  /// used whenever present. The legacy `preset` / `price` / `exclusive`
+  /// derivation is kept only as a fallback for a schedule without a `mode`
+  /// (ordering matches the app's `itemType`: exclusive → show → private →
+  /// funding → public, else offline).
   LivestreamStatus get status {
     final s = schedule;
     if (s == null) return LivestreamStatus.offline;
+    final mode = s.mode;
+    if (mode != null) return mode.toStatus();
     if (s.exclusive == true) return LivestreamStatus.exclusive;
     if (s.isShow) return LivestreamStatus.performing;
     if (s.preset == StreamPreset.sd) return LivestreamStatus.performing;

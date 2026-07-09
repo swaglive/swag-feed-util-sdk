@@ -7,6 +7,7 @@ import 'package:dio_cache_interceptor/dio_cache_interceptor.dart';
 import 'package:livestream_sdk_core/livestream_sdk_core.dart' as sdk_core;
 
 import 'livestream_sdk.dart';
+import 'log/feed_util_log.dart';
 import 'model/livestream_item.dart';
 import 'model/livestream_page.dart';
 
@@ -32,7 +33,8 @@ class LivestreamSdkImpl implements LivestreamSdk {
   /// tracker Bearer-token and time-profiling interceptors installed
   /// (the tracker's ttfb measurement depends on the latter).
   LivestreamSdkImpl(this._config, {Dio? httpClient})
-    : _http = httpClient ?? _defaultHttpClient(_config) {
+    : _http = httpClient ?? _defaultHttpClient(_config),
+      _ownsHttpClient = httpClient == null {
     // Only augment the client we create ourselves. An injected [httpClient]
     // (test seam / shared Dio) is left exactly as the caller configured it — we
     // neither replace its transformer (set in _defaultHttpClient) nor add the
@@ -63,6 +65,13 @@ class LivestreamSdkImpl implements LivestreamSdk {
 
   final LivestreamSdkConfig _config;
   final Dio _http;
+
+  /// Whether we created [_http] ourselves (vs. an injected test seam / shared
+  /// Dio). Only an owned client is mutated: its transformer is swapped for one
+  /// carrying the tracker-published AES keys (see [_runResolve]). An injected
+  /// client is left exactly as the caller configured it — the same rule the
+  /// constructor applies to the cache/reroute interceptors.
+  final bool _ownsHttpClient;
 
   /// Single-flight guard + cache for domain resolution.
   Completer<_ResolvedBases>? _resolving;
@@ -164,7 +173,8 @@ class LivestreamSdkImpl implements LivestreamSdk {
       limit: _pageSize,
     );
     // Enrich with live schedules (title/snapshot/session/status/viewers/…) —
-    // this is the packaged GetStreamSchedule logic (batch retained-events).
+    // this is the packaged GetStreamSchedule logic (batch
+    // /sessions?include=livestream_detail).
     final enriched = await sdk_core.EnrichLivestreamTitlesUseCase(
       repository,
     ).call(base);
@@ -268,7 +278,7 @@ class LivestreamSdkImpl implements LivestreamSdk {
     if (snapshotPath == null) return null; // stream has no snapshot
 
     final bases = await _resolveBases();
-    final publicBase = bases.publicBase;
+    final publicBase = bases.encryptedPublicBase ?? bases.publicBase;
     if (publicBase == null) return null; // public host not resolved (B1)
 
     final url = sdk_core.buildSnapshotUrl(
@@ -312,6 +322,10 @@ class LivestreamSdkImpl implements LivestreamSdk {
         .toString();
   }
 
+  @override
+  void setLogListener(FeedUtilLogCallback? listener) =>
+      FeedUtilLog.instance.setCallback(listener);
+
   /// Lazy, cached, single-flight domain resolution (Feature 1).
   Future<_ResolvedBases> _resolveBases() {
     final cached = _bases;
@@ -348,6 +362,28 @@ class LivestreamSdkImpl implements LivestreamSdk {
 
     try {
       final resolved = await tracker.resolve();
+
+      // Apply any AES key rotation the tracker publishes alongside the domains.
+      // PUBLIC_URL_ENCRYPT_KEYS arrives as a space-separated list of
+      // `keyId:base64Key` pairs (same wire form as the web app env and
+      // packages/core's EncryptRemoteConfigKitX). Rebuild the transformer so
+      // cover decryption keeps working across a rotated key id — merged over
+      // the built-in defaults so the out-of-the-box key never regresses.
+      // Only on a client we own; an injected one is left untouched (B1).
+      if (_ownsHttpClient) {
+        final encryptKeys = _parseEncryptKeys(
+          resolved.remoteConfigOverrides[_publicUrlEncryptKeysConfigKey],
+        );
+        if (encryptKeys.isNotEmpty) {
+          _http.transformer = sdk_core.AesDecryptFusedTransformer(
+            encryptKeys: {
+              ...sdk_core.AesDecryptFusedTransformer.defaultEncryptKeys,
+              ...encryptKeys,
+            },
+          );
+        }
+      }
+
       return _ResolvedBases(
         api: resolved.api,
         frontend: resolved.frontend,
@@ -379,7 +415,29 @@ class LivestreamSdkImpl implements LivestreamSdk {
   /// the backend contract (WS-B / B1). A missing type resolves to `null`,
   /// leaving the interceptor a no-op.
   static const _publicResourceType = 'cdn';
-  static const _encryptedPublicResourceType = 'encrypted-public';
+  static const _encryptedPublicResourceType = 'cdn_enc';
+
+  /// Remote-config key (in the tracker's `remoteConfigOverrides`) carrying the
+  /// AES keys used to decrypt public assets.
+  static const _publicUrlEncryptKeysConfigKey = 'PUBLIC_URL_ENCRYPT_KEYS';
+
+  /// Parses a `PUBLIC_URL_ENCRYPT_KEYS` override into a `keyId -> base64Key`
+  /// map. The value is a whitespace-separated list of `keyId:base64Key` pairs;
+  /// base64 never contains `:`, so a single split is unambiguous. Malformed
+  /// entries are skipped rather than throwing — the same lenient parse as
+  /// packages/core's `EncryptRemoteConfigKitX.publicUrlEncryptKeys`. A null or
+  /// empty override yields an empty map (leave the transformer's defaults).
+  static Map<String, String> _parseEncryptKeys(String? raw) {
+    if (raw == null || raw.isEmpty) return const {};
+    final result = <String, String>{};
+    for (final element in raw.split(RegExp(r'\s+'))) {
+      if (element.isEmpty) continue;
+      final parts = element.split(':');
+      if (parts.length != 2) continue;
+      result[parts[0]] = parts[1];
+    }
+    return result;
+  }
 
   /// Normalizes a tracker server entry to a full https [Uri], accepting both
   /// full URLs (`https://t1.example.com`) and bare hosts (`t1.example.com`).

@@ -35,6 +35,7 @@ export 'src/data/livestream_feed_path_normalizer.dart';
 export 'src/data/snapshot_url_builder.dart';
 export 'src/model/livestream.dart';
 export 'src/model/livestream_metadata.dart';
+export 'src/model/livestream_mode.dart';
 export 'src/model/livestream_status.dart';
 export 'src/model/stream_schedule.dart';
 export 'src/repository/livestream_feed_repository.dart';

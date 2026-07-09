@@ -1,3 +1,5 @@
+import 'livestream_mode.dart';
+
 /// Known stream preset names (the backend's `preset` field).
 ///
 /// A tiny local constant rather than importing packages/model's
@@ -7,18 +9,19 @@ abstract final class StreamPreset {
   static const preview = 'preview';
 }
 
-/// The live state of a streamer, parsed from the `stream.online` retained
-/// event (plus accumulated `session.rating.updated`, `stream.viewers.updated`
-/// and `goal.*` events).
+/// The live state of a streamer.
 ///
-/// Pure-Dart counterpart of packages/model's `StreamSchedule`, carrying only
-/// the fields the feed needs to render and classify a card. A `null`
-/// [StreamSchedule] for a streamer means "offline".
+/// Populated from a `GET /sessions?include=livestream_detail` element (BE API
+/// GENP-3379). Pure-Dart counterpart of packages/model's `StreamSchedule`,
+/// carrying only the fields the feed needs to render and classify a card. A
+/// `null` [StreamSchedule] for a streamer means "offline" (the streamer's
+/// user_id was not returned by `/sessions`).
 class StreamSchedule {
   const StreamSchedule({
     this.sessionId,
     this.preset,
     this.price,
+    this.mode,
     this.snapshot,
     this.exclusive,
     this.title,
@@ -31,11 +34,16 @@ class StreamSchedule {
     this.fundingProgress,
   });
 
-  /// The live session id (maps from the event's `session` field).
+  /// The live session id (maps from the `/sessions` element's `id` field).
   final String? sessionId;
 
   /// `sd` (private) or `preview` (public) — see [StreamPreset].
   final String? preset;
+
+  /// Authoritative session mode from the backend (`/sessions` `mode` field).
+  /// Preferred over the legacy `preset` / `price` derivation for classifying
+  /// the card status; `null` only when the backend omits it.
+  final LivestreamMode? mode;
 
   /// Ticket price for the current preset; `null` on a show stream.
   final int? price;
@@ -82,6 +90,7 @@ class StreamSchedule {
     String? sessionId,
     String? preset,
     int? price,
+    LivestreamMode? mode,
     String? snapshot,
     bool? exclusive,
     String? title,
@@ -97,6 +106,7 @@ class StreamSchedule {
       sessionId: sessionId ?? this.sessionId,
       preset: preset ?? this.preset,
       price: price ?? this.price,
+      mode: mode ?? this.mode,
       snapshot: snapshot ?? this.snapshot,
       exclusive: exclusive ?? this.exclusive,
       title: title ?? this.title,

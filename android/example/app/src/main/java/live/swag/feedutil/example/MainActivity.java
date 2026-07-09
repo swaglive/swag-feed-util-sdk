@@ -1,6 +1,7 @@
 package live.swag.feedutil.example;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -30,6 +31,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import io.flutter.plugin.common.MethodChannel;
@@ -299,7 +301,14 @@ public class MainActivity extends Activity {
         String url = frontendBase
                 + (frontendBase.endsWith("/") ? "" : "/")
                 + "user/" + Uri.encode(id) + "/livestream";
-        Toast.makeText(this, url, Toast.LENGTH_LONG).show();
+        // Open the livestream web page in an in-app Chrome Custom Tab. Falls
+        // back to surfacing the URL if the device has no browser/handler
+        // (launchUrl throws ActivityNotFoundException) so the demo never crashes.
+        try {
+            new CustomTabsIntent.Builder().build().launchUrl(this, Uri.parse(url));
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(this, url, Toast.LENGTH_LONG).show();
+        }
     }
 
     /**

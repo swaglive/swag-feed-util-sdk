@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:feed_util/feed_util.dart';
 import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
 /// External Flutter consumer of the feed_util Livestream SDK: adds `feed_util`
 /// as a dependency and calls [LivestreamSdk] directly — no MethodChannel.
@@ -106,10 +107,17 @@ class _FeedPageState extends State<FeedPage> {
     }
   }
 
-  void _showUrl(LivestreamItem item) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(_sdk.buildLivestreamUrl(item.id))));
+  void _openLivestream(LivestreamItem item) {
+    // Open the SDK-built livestream URL in an in-app web view (playback is a
+    // web page — see the SDK model), rather than just surfacing the string.
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _LivestreamWebViewPage(
+          url: _sdk.buildLivestreamUrl(item.id),
+          title: item.displayName ?? item.username,
+        ),
+      ),
+    );
   }
 
   @override
@@ -132,7 +140,7 @@ class _FeedPageState extends State<FeedPage> {
           items: _items,
           onRefresh: _refresh,
           onLoadMore: _loadMore,
-          onTapItem: _showUrl,
+          onTapItem: _openLivestream,
           onLoadCover: _sdk.getCoverImage,
         ),
       },
@@ -559,6 +567,39 @@ class _ErrorView extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// In-app browser that loads the livestream web page the SDK builds for a
+/// tapped card. Mirrors the SDK model: playback is just a web view opened with
+/// [LivestreamSdk.buildLivestreamUrl].
+class _LivestreamWebViewPage extends StatefulWidget {
+  const _LivestreamWebViewPage({required this.url, required this.title});
+
+  final String url;
+  final String title;
+
+  @override
+  State<_LivestreamWebViewPage> createState() => _LivestreamWebViewPageState();
+}
+
+class _LivestreamWebViewPageState extends State<_LivestreamWebViewPage> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..loadRequest(Uri.parse(widget.url));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.title)),
+      body: WebViewWidget(controller: _controller),
     );
   }
 }

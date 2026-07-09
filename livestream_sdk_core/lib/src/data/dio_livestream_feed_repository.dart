@@ -5,15 +5,20 @@ import '../model/stream_schedule.dart';
 import '../repository/livestream_feed_repository.dart';
 import 'livestream_feed_path_normalizer.dart';
 import 'mapper/livestream_info_response_mapper.dart';
-import 'mapper/stream_schedule_response_mapper.dart';
+import 'mapper/session_response_mapper.dart';
 import 'model/livestream_info_response.dart';
-import 'model/stream_schedule_response.dart';
+import 'model/session_response.dart';
 
 /// Plain-Dio [LivestreamFeedRepository] for consumers without packages/core
 /// (feed_util). Endpoint paths, query parameters and 404-as-empty semantics
-/// mirror packages/data's `LivestreamPageRepository` /
-/// `RetainedEventsRepository` — the difference is the base host, which here
-/// comes from the domain-tracker-resolved [apiBase] rather than RemoteConfig.
+/// mirror packages/data's `LivestreamPageRepository` — the difference is the
+/// base host, which here comes from the domain-tracker-resolved [apiBase]
+/// rather than RemoteConfig.
+///
+/// Live enrichment uses the merged `GET /sessions?include=livestream_detail`
+/// endpoint (BE API GENP-3379): a single request per batch of streamers
+/// returns each active session's live detail, replacing the old per-streamer
+/// `/pusher/retained-events` fan-out.
 final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
   DioLivestreamFeedRepository({required Uri apiBase, required Dio httpClient})
     : _apiBase = apiBase,
@@ -22,18 +27,18 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
   final Uri _apiBase;
   final Dio _http;
 
-  /// Retained-events channel prefix for a user (mirrors the app's
-  /// `ServerPushRepository.privateUserChannel`).
-  static const _privateUserChannel = 'private-enc-user@';
-
-  /// Server accepts at most 10 channels per retained-events request.
-  static const _channelBatchSize = 10;
+  /// `/sessions` accepts 1–100 `user_id` values per request (BE API GENP-3379).
+  static const _sessionBatchSize = 100;
 
   // Query-parameter keys (mirror packages/core `Parameter`).
   static const _paramLimit = 'limit';
   static const _paramPage = 'page';
   static const _paramSorting = 'sorting';
-  static const _paramChannels = 'channels';
+  static const _paramUserId = 'user_id';
+  static const _paramInclude = 'include';
+
+  /// `include` value that appends the live-detail fields to `/sessions`.
+  static const _includeLivestreamDetail = 'livestream_detail';
 
   @override
   Future<String?> resolveFeedPath(
@@ -117,10 +122,10 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
   }) async {
     if (streamerIds.isEmpty) return const {};
     final batches = <List<String>>[
-      for (int i = 0; i < streamerIds.length; i += _channelBatchSize)
+      for (int i = 0; i < streamerIds.length; i += _sessionBatchSize)
         streamerIds.sublist(
           i,
-          (i + _channelBatchSize).clamp(0, streamerIds.length),
+          (i + _sessionBatchSize).clamp(0, streamerIds.length),
         ),
     ];
     final results = await Future.wait(
@@ -129,108 +134,52 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
     return {for (final batch in results) ...batch};
   }
 
+  /// Fetches one batch of live details via
+  /// `GET /sessions?user_id=…&include=livestream_detail`.
+  ///
+  /// `/sessions` returns only active sessions, so a requested streamer that is
+  /// absent from the response is offline and simply omitted from the map.
+  /// `limit` is set to the batch size so every requested streamer fits on a
+  /// single page (`/sessions` paginates its own response).
   Future<Map<String, StreamSchedule>> _fetchScheduleBatch(
     List<String> streamerIds,
     CancelToken? cancelToken,
   ) async {
-    final channels = [for (final id in streamerIds) '$_privateUserChannel$id'];
     try {
+      final path = _buildUri('sessions', {
+        _paramUserId: streamerIds,
+        _paramInclude: [_includeLivestreamDetail],
+        _paramLimit: [streamerIds.length.toString()],
+      }).toString();
       final response = await _http.fetch<dynamic>(
-        RequestOptions(
-          path: _buildUri('pusher/retained-events', {
-            _paramChannels: channels,
-          }).toString(),
-          method: 'GET',
-          cancelToken: cancelToken,
-        ),
+        RequestOptions(path: path, method: 'GET', cancelToken: cancelToken),
       );
       final data = response.data;
-      if (data is! Map) return const {};
+      if (data is! List) return const {};
       final result = <String, StreamSchedule>{};
-      for (int i = 0; i < streamerIds.length; i++) {
-        final events = data[channels[i]];
-        final schedule = _parseStreamOnline(events is List ? events : null);
-        if (schedule != null) result[streamerIds[i]] = schedule;
+      for (final element in data.whereType<Map<String, dynamic>>()) {
+        final session = SessionResponse.fromJson(element);
+        final streamer = session.streamer;
+        if (streamer == null || streamer.isEmpty) continue;
+        result[streamer] = session.toStreamSchedule();
       }
       return result;
+    } on DioException catch (e) {
+      // Treat a 404 as "no active sessions" rather than an error.
+      if (e.response?.statusCode == 404) return const {};
+      return const {};
     } catch (_) {
       return const {};
     }
-  }
-
-  /// Reduces a channel's retained-event list into a [StreamSchedule].
-  ///
-  /// Finds the `stream.online` event and layers on rating, summed viewers and
-  /// goal (title / funding target / progress) accumulated across events.
-  /// Returns `null` when there is no `stream.online` (streamer offline).
-  /// Mirrors `RetainedEventsRepository._parseStreamOnline`.
-  StreamSchedule? _parseStreamOnline(List<dynamic>? events) {
-    if (events == null || events.isEmpty) return null;
-
-    StreamScheduleResponse? online;
-    double? currentRating;
-    int? currentRatingCount;
-    int? viewersSum;
-    String? showTitle;
-    int? fundingTarget;
-    int? fundingProgress;
-
-    for (final event in events) {
-      if (event is! Map) continue;
-      final name = event['event'];
-      final payload = event['data'];
-      if (payload is! Map<String, dynamic>) continue;
-
-      // if/else-if (rather than switch) to mirror the app's
-      // RetainedEventsRepository._parseStreamOnline and keep the `goal.*`
-      // group as a single OR-branch.
-      if (name == _Event.streamOnline) {
-        online = StreamScheduleResponse.fromJson(payload);
-      } else if (name == _Event.sessionRatingUpdated) {
-        currentRating = (payload['current_rating'] as num?)?.toDouble();
-        currentRatingCount = (payload['current_rating_count'] as num?)?.toInt();
-      } else if (name == _Event.streamViewersUpdated) {
-        final v = (payload['viewers'] as num?)?.toInt() ?? 0;
-        viewersSum = (viewersSum ?? 0) + v;
-      } else if (name == _Event.goalAdded ||
-          name == _Event.goalUpdated ||
-          name == _Event.goalStarted ||
-          name == _Event.goalProgressUpdated ||
-          name == _Event.goalMetadataUpdated) {
-        final goal = GoalEventResponse.fromJson(payload);
-        final level = goal.levels?.isNotEmpty == true
-            ? goal.levels!.first
-            : null;
-        // Accumulate individually: lightweight events (e.g.
-        // goal.progress.updated) omit `levels`, so a wholesale overwrite
-        // would drop the title / target captured earlier.
-        if (level?.title != null) showTitle = level!.title;
-        if (level?.target != null) fundingTarget = level!.target;
-        if (goal.progress != null) fundingProgress = goal.progress;
-      }
-    }
-
-    if (online == null) return null;
-    final base = online.toStreamSchedule();
-    return base.copyWith(
-      title: (showTitle != null && showTitle.isNotEmpty)
-          ? showTitle
-          : base.title,
-      currentRating: currentRating,
-      currentRatingCount: currentRatingCount,
-      viewers: viewersSum,
-      fundingTarget: fundingTarget,
-      fundingProgress: fundingProgress,
-    );
   }
 
   /// Builds a URL from [_apiBase], appending [path] to any base path.
   ///
   /// Every value is normalized to a `List<String>` and passed via
   /// `queryParameters`, which emits one `key=value` pair per list element —
-  /// so multi-value keys (e.g. `channels` on retained-events) stay as repeated
-  /// query params instead of a single stringified list. Null values and keys
-  /// with no values are dropped.
+  /// so multi-value keys (e.g. repeated `user_id` on `/sessions`) stay as
+  /// repeated query params instead of a single stringified list. Null values
+  /// and keys with no values are dropped.
   Uri _buildUri(String path, Map<String, List<String>> query) {
     final cleaned = <String, List<String>>{};
     query.forEach((key, values) {
@@ -252,17 +201,4 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
       for (final entry in all.entries) entry.key: [...entry.value],
     };
   }
-}
-
-/// Retained-event names consumed by [_parseStreamOnline] (mirror the app's
-/// `PusherEventNames`).
-abstract final class _Event {
-  static const streamOnline = 'stream.online';
-  static const sessionRatingUpdated = 'session.rating.updated';
-  static const streamViewersUpdated = 'stream.viewers.updated';
-  static const goalAdded = 'goal.added';
-  static const goalUpdated = 'goal.updated';
-  static const goalStarted = 'goal.started';
-  static const goalProgressUpdated = 'goal.progress.updated';
-  static const goalMetadataUpdated = 'goal.metadata.updated';
 }

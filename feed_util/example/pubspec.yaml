@@ -21,6 +21,9 @@ dependencies:
   feed_util:
     path: ../
 
+  # In-app browser for the livestream web page a tapped card opens.
+  webview_flutter: ^4.10.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

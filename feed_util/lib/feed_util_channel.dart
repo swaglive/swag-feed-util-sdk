@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 
 import 'src/livestream_sdk.dart';
 import 'src/livestream_sdk_impl.dart';
+import 'src/log/feed_util_log.dart';
+import 'src/log/log_entry.dart';
 import 'src/model/livestream_page.dart';
 
 /// Dart-side counterpart of the native `FeedUtil` entry points
@@ -18,6 +22,11 @@ import 'src/model/livestream_page.dart';
 /// - `getLivestreamList {feedId, pageToken?, bustCache?}` → [LivestreamPage.toMap]
 /// - `getCoverImage {livestreamId}` → `Uint8List?`
 /// - `resolvedFrontendBase` → `String`
+///
+/// And Dart → native (pushed by the SDK, not a host request):
+/// - `log {severity, message}` → null — a diagnostic [LogEntry] delivered to
+///   the native `FeedUtil` log callback (best-effort; ignored if no native
+///   handler is attached).
 ///
 /// Errors cross as [PlatformException] with a stable `code`:
 /// `not_configured` · `already_configured` · `bad_args` ·
@@ -39,12 +48,26 @@ class FeedUtilChannel {
   /// Starts listening for calls from the native side.
   void init() {
     _channel.setMethodCallHandler(_handle);
+    // Forward SDK diagnostic logs to the native FeedUtil log callback.
+    FeedUtilLog.instance.bindNativeSink(_pushLog);
   }
 
   /// Stops listening and releases the SDK.
   void dispose() {
     _channel.setMethodCallHandler(null);
+    FeedUtilLog.instance.bindNativeSink(null);
     _sdk = null;
+  }
+
+  /// Pushes a diagnostic [LogEntry] to the native side over the channel.
+  ///
+  /// Fire-and-forget and best-effort: logging must never throw into or block
+  /// the code path that emitted it, and a host with no `log` handler (or no
+  /// native side at all, e.g. in Dart unit tests) must not surface an error.
+  void _pushLog(LogEntry entry) {
+    unawaited(
+      _channel.invokeMethod<void>('log', entry.toMap()).catchError((_) {}),
+    );
   }
 
   /// Invokes a native-side method (handled in `FeedUtil.swift` /

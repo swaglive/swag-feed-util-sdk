@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 
 import 'model/livestream_page.dart';
+import 'log/feed_util_log.dart';
+import 'log/log_entry.dart';
 
 import 'livestream_sdk_impl.dart';
 
@@ -73,6 +75,15 @@ abstract interface class LivestreamSdk {
   /// Requires domains to be resolved (a prior successful
   /// [getLivestreamList]).
   String buildLivestreamUrl(String livestreamId);
+
+  /// Registers a [listener] that receives the SDK's diagnostic [LogEntry]s
+  /// (severity + message) to aid integrator debugging. Pass `null` to clear it.
+  ///
+  /// This is the Dart-host equivalent of the native FeedUtil log listener
+  /// (`FeedUtil.setLogListener` on Android, the `FeedUtil.logListener` property
+  /// on iOS); both deliver the same entries. Registration is process-wide (not
+  /// tied to this instance), so a call replaces any previously set Dart listener.
+  void setLogListener(FeedUtilLogCallback? listener);
 }
 
 /// Thrown when no domain tracker config server responds (spec §04 step 1).
