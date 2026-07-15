@@ -21,7 +21,11 @@ import 'src/model/livestream_page.dart';
 /// - `configure {trackerServers, trackerAuthToken?, trackerLabels?}` → null
 /// - `getLivestreamList {feedId, pageToken?, bustCache?}` → [LivestreamPage.toMap]
 /// - `getCoverImage {livestreamId}` → `Uint8List?`
-/// - `resolvedFrontendBase` → `String`
+/// - `livestreamUrlContext` → `{frontendBase: String, query: String}` — the
+///   resolved frontend base plus the web-view query
+///   (`config=KEY:::VALUE&…`, one `config` per tracker remote-config
+///   override; may be empty), cached natively so `buildLivestreamUrl` stays
+///   synchronous after the first resolve
 ///
 /// And Dart → native (pushed by the SDK, not a host request):
 /// - `log {severity, message}` → null — a diagnostic [LogEntry] delivered to
@@ -42,7 +46,7 @@ class FeedUtilChannel {
   static const _channel = MethodChannel('feed_util/method');
 
   /// Built by `configure`; the impl type is used so the channel can call the
-  /// impl-only `resolvedFrontendBase()` (kept off the public interface).
+  /// impl-only `livestreamUrlContext()` (kept off the public interface).
   LivestreamSdkImpl? _sdk;
 
   /// Starts listening for calls from the native side.
@@ -87,8 +91,8 @@ class FeedUtilChannel {
           return await _getLivestreamList(_args(call));
         case 'getCoverImage':
           return await _getCoverImage(_args(call));
-        case 'resolvedFrontendBase':
-          return await _requireSdk().resolvedFrontendBase();
+        case 'livestreamUrlContext':
+          return await _requireSdk().livestreamUrlContext();
         default:
           throw MissingPluginException(
             'feed_util: ${call.method} not implemented',

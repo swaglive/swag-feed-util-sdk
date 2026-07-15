@@ -137,9 +137,16 @@ class LivestreamSdkImpl implements LivestreamSdk {
   }
 
   /// Implementation detail (not on [LivestreamSdk]): resolved frontend base
+  /// plus the fixed web-view query string (see [buildLivestreamWebQuery]),
   /// handed to the native facade so its `buildLivestreamUrl` stays sync.
-  Future<String> resolvedFrontendBase() async =>
-      (await _resolveBases()).frontend.toString();
+  /// Both are constant for the SDK's lifetime once resolved.
+  Future<Map<String, String>> livestreamUrlContext() async {
+    final bases = await _resolveBases();
+    return {
+      'frontendBase': bases.frontend.toString(),
+      'query': buildLivestreamWebQuery(bases.remoteConfigOverrides),
+    };
+  }
 
   @override
   Future<LivestreamPage> getLivestreamList(
@@ -155,6 +162,10 @@ class LivestreamSdkImpl implements LivestreamSdk {
     final repository = _feedRepository ??= sdk_core.DioLivestreamFeedRepository(
       apiBase: bases.api,
       httpClient: _http,
+      // Surface best-effort failures (e.g. a dropped /sessions schedule
+      // batch, whose streamers then classify as offline and get filtered)
+      // that the repository otherwise swallows.
+      onWarning: _log.warning,
     );
 
     // Resolve the config path to the real feed path on the first page only;
@@ -216,9 +227,9 @@ class LivestreamSdkImpl implements LivestreamSdk {
       _log.error('getLivestreamList: live-schedule enrichment failed — $e');
       rethrow;
     }
-    _log.info('getLivestreamList: returning ${enriched.length} item(s)');
-
     // Retain each stream's encrypted snapshot path for lazy getCoverImage.
+    // Deliberately over the full enriched list (before the offline filter):
+    // the removal branch must see offline entries to purge their stale paths.
     for (final livestream in enriched) {
       final snapshotPath = livestream.snapshot;
       if (snapshotPath != null && snapshotPath.isNotEmpty) {
@@ -231,13 +242,29 @@ class LivestreamSdkImpl implements LivestreamSdk {
       }
     }
 
+    // Spec §05: offline entries are never rendered — drop them from the page.
+    // Filtering by status (not just "has a schedule") also excludes sessions
+    // whose mode collapses to offline (exclusiveEnd / unknown / legacy
+    // fallback). Note the /sessions batch fetch is best-effort: if it fails,
+    // the unenriched entries all classify as offline and the page comes back
+    // short (worst case empty) with paging intact via nextToken.
+    final visible = [
+      for (final livestream in enriched)
+        if (livestream.status != sdk_core.LivestreamStatus.offline) livestream,
+    ];
+    _log.info(
+      'getLivestreamList: returning ${visible.length} item(s) '
+      '(${enriched.length - visible.length} offline filtered)',
+    );
+
     // A full page implies there may be more; a short page is the last one.
+    // Derived from the RAW page length — filtering must not end paging early.
     final PageToken? nextToken = base.length >= _pageSize
         ? _FeedCursor(feedPath: feedPath, page: page + 1).encode()
         : null;
 
     return LivestreamPage(
-      items: [for (final livestream in enriched) _toItem(livestream)],
+      items: [for (final livestream in visible) _toItem(livestream)],
       nextToken: nextToken,
     );
   }
@@ -370,15 +397,68 @@ class LivestreamSdkImpl implements LivestreamSdk {
         'domains not resolved yet — call getLivestreamList or prewarm first',
       );
     }
-    // Spec §06: {frontendBase}/user/{id}/livestream
-    // Encode the id: ? / # or / inside it would otherwise be read by
-    // Uri.resolve as query/fragment/path separators and corrupt the URL.
-    return bases.frontend
+    final url = composeLivestreamUrl(
+      frontend: bases.frontend,
+      livestreamId: livestreamId,
+      remoteConfigOverrides: bases.remoteConfigOverrides,
+    );
+    // Log the exact link handed to the host (QA field finding 2026-07-14:
+    // a malformed/config-less link is invisible without this). Unlike the
+    // resolve logs, the override *values* do appear here — they are part of
+    // the URL itself, which the host receives anyway.
+    _log.info('buildLivestreamUrl: $url');
+    return url;
+  }
+
+  /// Composes the full livestream web-view URL (spec §06 + QA finding
+  /// 2026-07-14): `{frontendBase}/user/{id}/livestream?{query}` where the
+  /// query carries the tracker's remote-config overrides — without them the
+  /// web frontend loads against its default (blocked) domains and the page
+  /// fails to open in the field.
+  ///
+  /// The id is encoded: ? / # or / inside it would otherwise be read by
+  /// Uri.resolve as query/fragment/path separators and corrupt the URL.
+  static String composeLivestreamUrl({
+    required Uri frontend,
+    required String livestreamId,
+    required Map<String, String> remoteConfigOverrides,
+  }) {
+    final base = frontend
         .resolve('user/')
         .resolve('${Uri.encodeComponent(livestreamId)}/')
-        .resolve('livestream')
-        .toString();
+        .resolve('livestream');
+    final query = buildLivestreamWebQuery(remoteConfigOverrides);
+    return query.isEmpty ? '$base' : '$base?$query';
   }
+
+  /// Builds the query string the livestream web page expects: one repeated
+  /// `config` param per tracker remote-config override, each valued
+  /// `KEY:::VALUE`. Empty when there are no overrides.
+  ///
+  /// Values are form-encoded ([Uri.encodeQueryComponent]: space → `+`), then
+  /// `:` `/` `,` are restored — they are legal in a query per RFC 3986 and the
+  /// web frontend's expected link carries them raw
+  /// (`config=API_URL_PREFIX:::https://api.example.com`).
+  ///
+  /// Overrides are passed through verbatim (no filtering): the SDK cannot know
+  /// which keys the web frontend needs, and the tracker publishes them
+  /// specifically for the resolved resources.
+  static String buildLivestreamWebQuery(
+    Map<String, String> remoteConfigOverrides,
+  ) {
+    final buffer = StringBuffer();
+    for (final entry in remoteConfigOverrides.entries) {
+      if (buffer.isNotEmpty) buffer.write('&');
+      buffer
+        ..write('config=')
+        ..write(_encodeWebQueryValue('${entry.key}:::${entry.value}'));
+    }
+    return buffer.toString();
+  }
+
+  static String _encodeWebQueryValue(String value) => Uri.encodeQueryComponent(
+    value,
+  ).replaceAll('%3A', ':').replaceAll('%2F', '/').replaceAll('%2C', ',');
 
   @override
   void setLogListener(FeedUtilLogCallback? listener) =>
@@ -465,6 +545,9 @@ class LivestreamSdkImpl implements LivestreamSdk {
       return _ResolvedBases(
         api: resolved.api,
         frontend: resolved.frontend,
+        // Retained for buildLivestreamUrl: the web page needs the overrides as
+        // repeated `config` query params or it loads against blocked domains.
+        remoteConfigOverrides: resolved.remoteConfigOverrides,
         // Optional hosts for EncryptedDomainInterceptor's public->encrypted
         // rerouting. The exact tracker resource types are pending the backend
         // merged-API confirmation (WS-B / B1); until the tracker advertises
@@ -563,12 +646,17 @@ class _ResolvedBases {
   const _ResolvedBases({
     required this.api,
     required this.frontend,
+    this.remoteConfigOverrides = const {},
     this.publicBase,
     this.encryptedPublicBase,
   });
 
   final Uri api;
   final Uri frontend;
+
+  /// Remote-config overrides from the selected resources' metadata, appended
+  /// to the livestream web-view URL as `config=KEY:::VALUE` params.
+  final Map<String, String> remoteConfigOverrides;
 
   /// Public image-CDN base, if the tracker advertises one (else `null`).
   final Uri? publicBase;

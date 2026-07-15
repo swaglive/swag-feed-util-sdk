@@ -1,17 +1,15 @@
 import 'log_severity.dart';
 
-/// A single diagnostic log record surfaced to the integrator's log callback.
-///
-/// Deliberately minimal — a [severity] and a human-readable [message] — so it
-/// serializes cleanly across the `feed_util/method` MethodChannel to the
-/// native `FeedUtil` facades (`FeedUtil.kt` / `FeedUtil.swift`).
+/// A diagnostic log record delivered to the listener you register with
+/// `LivestreamSdk.setLogListener`: a [severity] plus a human-readable
+/// [message]. Forward it to your app's logging while troubleshooting.
 class LogEntry {
   const LogEntry({required this.severity, required this.message});
 
   final LogSeverity severity;
   final String message;
 
-  /// Wire form pushed to the native side.
+  /// Internal wire form used by the SDK's native bridge.
   Map<String, Object?> toMap() => {
     'severity': severity.wireName,
     'message': message,

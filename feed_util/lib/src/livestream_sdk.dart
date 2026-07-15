@@ -6,11 +6,10 @@ import 'log/log_entry.dart';
 
 import 'livestream_sdk_impl.dart';
 
-/// SDK configuration (spec §07 — minimal injection).
+/// Configuration for [LivestreamSdk].
 ///
-/// Only [trackerServers] is caller-required. The tracker auth token is baked
-/// into the SDK at build time (CI secret, never a source literal) and can
-/// optionally be overridden; labels are truly optional.
+/// Only [trackerServers] is required; the other fields are optional overrides
+/// you normally leave unset.
 class LivestreamSdkConfig {
   const LivestreamSdkConfig({
     required this.trackerServers,
@@ -18,75 +17,86 @@ class LivestreamSdkConfig {
     this.trackerLabels,
   });
 
-  /// Domain tracker candidate config-server hosts (required, spec-mandated
-  /// external injection).
+  /// Servers the SDK contacts at startup to discover working service domains
+  /// (required). Use the list provided by Swag during onboarding; entries may
+  /// be full URLs (`https://t1.example.com`) or bare hosts (`t1.example.com`).
   final List<String> trackerServers;
 
-  /// `null` = use the SDK's built-in Swag token.
+  /// Overrides the SDK's built-in access token for the servers above.
+  /// Leave `null` unless Swag instructs otherwise.
   final String? trackerAuthToken;
 
-  /// `null` = no resource filtering.
+  /// Optional filter labels provided by Swag alongside the server list.
+  /// Leave `null` to accept everything.
   final List<String>? trackerLabels;
 }
 
-/// Dart-side facade of the Livestream SDK (spec §03, GENP-3261).
+/// Embeds Swag livestreams in your app: list the streams that are live
+/// ([getLivestreamList]), show their covers ([getCoverImage]), and open a
+/// stream in a web view ([buildLivestreamUrl]) — no native player needed.
 ///
-/// Three core features behind one contract:
-///
-/// 1. Domain tracker — resolved lazily on the first [getLivestreamList] call
-///    and cached; callers never see domains.
-/// 2. Livestream feed — [getLivestreamList] (+ lazy [getCoverImage]).
-/// 3. Livestream URL — [buildLivestreamUrl] from the cached frontend base.
-///
-/// The native `FeedUtil` entry points call these methods over the
-/// `feed_util/method` MethodChannel (bridge contract in spec §03).
+/// The SDK finds a reachable service domain automatically on the first
+/// [getLivestreamList] call and keeps using it, so no domain or URL setup is
+/// needed beyond [LivestreamSdkConfig.trackerServers].
 abstract interface class LivestreamSdk {
-  /// Applies caller configuration. Must be called before any other method.
+  /// Creates an SDK instance with [config].
+  ///
+  /// Create one instance and reuse it: the discovered service domain and
+  /// fetched covers are cached per instance.
   factory LivestreamSdk(LivestreamSdkConfig config) = LivestreamSdkImpl;
 
-  /// Fetches one page of the livestream feed.
+  /// Fetches one page of livestreams for [feedId].
   ///
-  /// First call resolves and caches domains internally. Pass [pageToken]
-  /// from the previous page's [LivestreamPage.nextToken] (or `null` for the
-  /// first page). [bustCache] appends a timestamp cache-buster so the CDN
-  /// edge cache is bypassed.
+  /// For the first page pass no [pageToken]; for the next page pass the
+  /// previous page's [LivestreamPage.nextToken]. A `null` `nextToken` means
+  /// there are no more pages.
   ///
-  /// Throws [DomainTrackerServerNotFoundException] when every tracker server
-  /// is unreachable.
+  /// The first call may take noticeably longer: it also discovers a reachable
+  /// service domain. Set [bustCache] to `true` to skip intermediate caches and
+  /// fetch the freshest data (slower; use for explicit pull-to-refresh, not
+  /// for every page).
+  ///
+  /// Throws [DomainTrackerServerNotFoundException] when none of the
+  /// configured servers can be reached (usually no connectivity).
   Future<LivestreamPage> getLivestreamList(
     String feedId, {
     PageToken? pageToken,
     bool bustCache = false,
   });
 
-  /// Decrypts and returns the cover image for [livestreamId], or `null` when
-  /// the livestream has no snapshot.
+  /// Returns the cover image for [livestreamId] as raw image bytes (ready for
+  /// `Image.memory`), or `null` when the stream currently has no cover — show
+  /// your own placeholder in that case.
   ///
-  /// Lazy by design (call when the card scrolls into view): the encrypted
-  /// snapshot path is SDK-internal, decryption happens in memory, and plaintext
-  /// never touches disk (spec §03). Covers change as the stream goes on, so
-  /// results are cached in memory following the origin's HTTP cache directives
-  /// (revalidated when stale) rather than pinned — repeated calls stay fresh.
+  /// Call it lazily, per card, when the card scrolls into view. Results are
+  /// cached in memory and kept fresh automatically, so calling it again for
+  /// the same stream (e.g. after scrolling back) is cheap.
+  ///
+  /// Only ids returned by [getLivestreamList] on this instance have covers;
+  /// unknown ids resolve to `null`.
   Future<Uint8List?> getCoverImage(String livestreamId);
 
-  /// Builds the livestream web-view URL (spec §06):
-  /// `{frontendBase}/user/{livestreamId}/livestream`.
+  /// Returns the URL that opens the livestream page (player, chat, and all)
+  /// for [livestreamId] — load it in a web view as-is.
   ///
-  /// Requires domains to be resolved (a prior successful
-  /// [getLivestreamList]).
+  /// The URL is self-contained; don't add, remove, or rewrite any part of it,
+  /// or the page may fail to load.
+  ///
+  /// Call after at least one successful [getLivestreamList]; before that the
+  /// SDK doesn't know the service domain yet and this throws a [StateError].
   String buildLivestreamUrl(String livestreamId);
 
-  /// Registers a [listener] that receives the SDK's diagnostic [LogEntry]s
-  /// (severity + message) to aid integrator debugging. Pass `null` to clear it.
+  /// Registers a [listener] for the SDK's diagnostic logs — wire it to your
+  /// logging when troubleshooting an integration. Pass `null` to stop.
   ///
-  /// This is the Dart-host equivalent of the native FeedUtil log listener
-  /// (`FeedUtil.setLogListener` on Android, the `FeedUtil.logListener` property
-  /// on iOS); both deliver the same entries. Registration is process-wide (not
-  /// tied to this instance), so a call replaces any previously set Dart listener.
+  /// Each [LogEntry] carries a severity and a message. Only one listener is
+  /// active at a time (registration is process-wide, not per instance).
   void setLogListener(FeedUtilLogCallback? listener);
 }
 
-/// Thrown when no domain tracker config server responds (spec §04 step 1).
+/// Thrown when none of the configured [LivestreamSdkConfig.trackerServers]
+/// can be reached — usually the device is offline or the server list is
+/// outdated. Safe to retry once connectivity returns.
 class DomainTrackerServerNotFoundException implements Exception {
   const DomainTrackerServerNotFoundException([this.message]);
 

@@ -20,12 +20,22 @@ import 'model/session_response.dart';
 /// returns each active session's live detail, replacing the old per-streamer
 /// `/pusher/retained-events` fan-out.
 final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
-  DioLivestreamFeedRepository({required Uri apiBase, required Dio httpClient})
-    : _apiBase = apiBase,
-      _http = httpClient;
+  DioLivestreamFeedRepository({
+    required Uri apiBase,
+    required Dio httpClient,
+    void Function(String message)? onWarning,
+  }) : _apiBase = apiBase,
+       _http = httpClient,
+       _onWarning = onWarning;
 
   final Uri _apiBase;
   final Dio _http;
+
+  /// Optional sink for swallowed, non-fatal errors (the schedule batch fetch
+  /// is best-effort — see [_fetchScheduleBatch]). No-op when null, keeping
+  /// this package free of any logger dependency; feed_util bridges it to its
+  /// SDK-wide log.
+  final void Function(String message)? _onWarning;
 
   /// `/sessions` accepts 1–100 `user_id` values per request (BE API GENP-3379).
   static const _sessionBatchSize = 100;
@@ -167,8 +177,18 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
     } on DioException catch (e) {
       // Treat a 404 as "no active sessions" rather than an error.
       if (e.response?.statusCode == 404) return const {};
+      // Cancellation is expected control-flow; don't surface it as a warning.
+      if (e.type == DioExceptionType.cancel) return const {};
+      // Best-effort: the batch is dropped (its streamers stay unenriched and
+      // classify as offline) — surface the cause so this isn't silent.
+      _onWarning?.call(
+        'fetchStreamSchedules: batch of ${streamerIds.length} failed — $e',
+      );
       return const {};
-    } catch (_) {
+    } catch (e) {
+      _onWarning?.call(
+        'fetchStreamSchedules: batch of ${streamerIds.length} failed — $e',
+      );
       return const {};
     }
   }

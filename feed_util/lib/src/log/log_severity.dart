@@ -1,8 +1,6 @@
-/// Severity of a [LogEntry] emitted by the SDK for integrator debugging.
-///
-/// Ordered least → most severe. The [name] doubles as the wire value that
-/// crosses the `feed_util/method` channel to the native `FeedUtil` facades,
-/// where it maps to the matching `LogSeverity` case.
+/// Severity of a [LogEntry], ordered least → most severe. Use it to filter
+/// how much SDK output reaches your logs (e.g. keep `warning`/`error` in
+/// production, everything while debugging).
 enum LogSeverity {
   verbose,
   debug,
@@ -10,12 +8,12 @@ enum LogSeverity {
   warning,
   error;
 
-  /// Value sent across the MethodChannel (the enum name, e.g. `"warning"`).
+  /// Internal wire value used by the SDK's native bridge (the enum name).
   String get wireName => name;
 
-  /// Parses a wire value produced by [wireName]. An unknown or `null` value
-  /// falls back to [LogSeverity.info] rather than throwing, so a future
-  /// severity added on one side never crashes the other.
+  /// Internal: parses a [wireName] value. An unknown or `null` value falls
+  /// back to [LogSeverity.info] rather than throwing, so a future severity
+  /// added on one side never crashes the other.
   static LogSeverity fromWire(String? value) {
     for (final severity in LogSeverity.values) {
       if (severity.name == value) return severity;

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.6.0  (2026-07-15, source 7a7dd13b)
+
+- 7a7dd13b Simplify docs (#1275)
+- db370e30 [GENP-3261] 將  config 加入 web link (#1272)
+- dfe1ec56 [GENP-3261] 隱藏下線的直播 (#1270)
+
 ## v0.5.0  (2026-07-09, source 8123626d)
 
 - 8123626d Add logs and print them (#1249)

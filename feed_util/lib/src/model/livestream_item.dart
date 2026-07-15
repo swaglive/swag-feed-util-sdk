@@ -1,17 +1,26 @@
-/// Card status shown by the caller's UI.
-///
-/// Spec §05: derived from `preset` / `price` / `exclusive` / funding
-/// target-progress (or returned directly by the merged feed API as `status`).
-enum LivestreamStatus { free, exclusive, performing, funding, offline }
+/// What a stream is doing right now — drives the card's status badge.
+enum LivestreamStatus {
+  /// Live and free to watch.
+  free,
 
-/// One livestream card from the feed (spec §03 / §05 merged-API shape).
+  /// Live with an exclusive (paid) show.
+  exclusive,
+
+  /// Live with a show in progress.
+  performing,
+
+  /// Live and raising funds toward a goal show — see
+  /// [LivestreamItem.fundingTarget] / [LivestreamItem.fundingProgress].
+  funding,
+
+  /// Not currently live.
+  offline,
+}
+
+/// One livestream card from the feed. Render the fields however fits your UI.
 ///
-/// Note: the cover image is deliberately NOT here — the snapshot path is
-/// encrypted and kept SDK-internal; callers fetch decrypted bytes lazily via
-/// `LivestreamSdk.getCoverImage(id)`.
-///
-/// Serialization (hand-written `toMap`/`fromMap` + round-trip tests) is
-/// task B2 — not part of the interface definition.
+/// The cover image is not carried here — fetch it lazily per visible card
+/// with `LivestreamSdk.getCoverImage(id)`.
 class LivestreamItem {
   const LivestreamItem({
     required this.id,
@@ -32,40 +41,62 @@ class LivestreamItem {
     this.fundingProgress,
   });
 
-  // Identity
+  /// Unique stream id — the value to pass to `getCoverImage` and
+  /// `buildLivestreamUrl`.
   final String id;
+
+  /// The streamer's account handle.
   final String username;
+
+  /// The streamer's display name. For the card subtitle, prefer this and fall
+  /// back to [username] when `null`.
   final String? displayName;
 
-  // Content
+  /// Stream title, if the streamer set one.
   final String? title;
 
-  // Session
+  /// Identifier of the current live session, if any.
   final String? sessionId;
+
+  /// See [LivestreamStatus].
   final LivestreamStatus status;
 
-  // Metrics
+  /// Current viewer count.
   final int viewers;
 
-  /// 0.0–5.0 (unit to be finalized with backend, spec §05 note 2).
+  /// Average rating, 0.0–5.0; `null` when the stream has no ratings yet.
   final double? score;
+
+  /// Number of ratings behind [score] — typically shown next to the stars,
+  /// e.g. `⭐ 4.8 (312)`.
   final int reviewCount;
 
-  // Badges
+  /// Raw badge tags from the backend. The common ones are already surfaced as
+  /// typed fields ([countryFlag], [isVipSponsor], [isNewbie], [hasToy]); use
+  /// this only if you need something beyond those.
   final List<String> badges;
 
-  /// Derived from a `country:xx` entry in [badges].
+  /// The streamer's country code (e.g. `jp`) for a flag icon, when known.
   final String? countryFlag;
+
+  /// Badge flag: VIP-sponsored streamer.
   final bool isVipSponsor;
+
+  /// Badge flag: new streamer.
   final bool isNewbie;
+
+  /// Badge flag: interactive toy connected.
   final bool hasToy;
 
-  // Funding shows only
+  /// Funding shows only: the ticket goal. Remaining tickets =
+  /// `fundingTarget - fundingProgress` (clamp at 0).
   final int? fundingTarget;
+
+  /// Funding shows only: tickets sold so far.
   final int? fundingProgress;
 
-  /// Wire form sent to native over the MethodChannel (bridge contract).
-  /// `status` is the enum name; `fromMap` + round-trip tests are task B2.
+  /// Internal wire form used by the SDK's native bridge — not needed when
+  /// calling the Dart API directly.
   Map<String, Object?> toMap() => {
     'id': id,
     'username': username,
