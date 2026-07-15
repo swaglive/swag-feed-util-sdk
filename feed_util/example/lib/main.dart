@@ -1,8 +1,10 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:feed_util/feed_util.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 /// External Flutter consumer of the feed_util Livestream SDK: adds `feed_util`
 /// as a dependency and calls [LivestreamSdk] directly — no MethodChannel.
@@ -604,7 +606,19 @@ class _LivestreamWebViewPageState extends State<_LivestreamWebViewPage> {
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
+
+    final PlatformWebViewControllerCreationParams params;
+
+    if (Platform.isIOS) {
+      params = WebKitWebViewControllerCreationParams(
+        allowsInlineMediaPlayback: true,
+        mediaTypesRequiringUserAction: const {},
+      );
+    } else {
+      params = const PlatformWebViewControllerCreationParams();
+    }
+
+    _controller = WebViewController.fromPlatformCreationParams(params)
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..loadRequest(Uri.parse(widget.url));
   }

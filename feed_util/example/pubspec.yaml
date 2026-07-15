@@ -1,7 +1,7 @@
 # Dir is examples/flutter (matches android/ios); the pub package name can't be
 # the literal `flutter` — that collides with the Flutter SDK package.
 name: feed_util_flutter_example
-description: "Example external Flutter app consuming the feed_util Livestream SDK as a Dart package."
+description: 'Example external Flutter app consuming the feed_util Livestream SDK as a Dart package.'
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -23,6 +23,7 @@ dependencies:
 
   # In-app browser for the livestream web page a tapped card opens.
   webview_flutter: ^4.10.0
+  webview_flutter_wkwebview: ^3.18.0
 
 dev_dependencies:
   flutter_test:

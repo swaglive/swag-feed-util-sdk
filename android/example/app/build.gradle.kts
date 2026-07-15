@@ -67,7 +67,4 @@ dependencies {
 
     // Pull-to-refresh for the demo feed (AndroidX; android.useAndroidX=true).
     implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
-
-    // Chrome Custom Tabs — opens a tapped card's livestream URL in-app.
-    implementation("androidx.browser:browser:1.8.0")
 }

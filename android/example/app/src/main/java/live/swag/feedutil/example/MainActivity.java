@@ -1,12 +1,11 @@
 package live.swag.feedutil.example;
 
 import android.app.Activity;
-import android.content.ActivityNotFoundException;
+import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.DisplayMetrics;
@@ -28,7 +27,6 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import live.swag.feedutil.CompletionCallback;
@@ -287,17 +285,15 @@ public class MainActivity extends Activity {
 
     /**
      * Builds the livestream web-view URL via the SDK and opens it in an in-app
-     * Chrome Custom Tab. Falls back to surfacing the URL if the device has no
-     * browser/handler so the demo never crashes.
+     * {@link WebViewActivity} — a WebView (not a Custom Tab) so the demo can set
+     * {@code mediaPlaybackRequiresUserGesture = false} and let the stream autoplay.
      */
     private void openUrl(String id) {
         FeedUtil.buildLivestreamUrl(id, new ResultCallback<String>() {
             @Override public void onSuccess(String url) {
-                try {
-                    new CustomTabsIntent.Builder().build().launchUrl(MainActivity.this, Uri.parse(url));
-                } catch (ActivityNotFoundException e) {
-                    Toast.makeText(MainActivity.this, url, Toast.LENGTH_LONG).show();
-                }
+                Intent intent = new Intent(MainActivity.this, WebViewActivity.class);
+                intent.putExtra(WebViewActivity.EXTRA_URL, url);
+                startActivity(intent);
             }
             @Override public void onError(FeedUtilException e) {
                 Toast.makeText(MainActivity.this, "URL unavailable: " + e.getMessage(),

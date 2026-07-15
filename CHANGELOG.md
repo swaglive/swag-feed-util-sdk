@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.7.0  (2026-07-15, source 30141769)
+
+- 30141769 Support livestream auto play (#1283)
+- 26192286 [GENP-3261] 加回 mdm=1 (#1282)
+
 ## v0.6.0  (2026-07-15, source 7a7dd13b)
 
 - 7a7dd13b Simplify docs (#1275)

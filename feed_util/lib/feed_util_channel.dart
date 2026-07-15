@@ -23,9 +23,9 @@ import 'src/model/livestream_page.dart';
 /// - `getCoverImage {livestreamId}` → `Uint8List?`
 /// - `livestreamUrlContext` → `{frontendBase: String, query: String}` — the
 ///   resolved frontend base plus the web-view query
-///   (`config=KEY:::VALUE&…`, one `config` per tracker remote-config
-///   override; may be empty), cached natively so `buildLivestreamUrl` stays
-///   synchronous after the first resolve
+///   (`mdm=1&config=KEY:::VALUE&…`, one `config` per tracker remote-config
+///   override; never empty — `mdm=1` is always present), cached natively so
+///   `buildLivestreamUrl` stays synchronous after the first resolve
 ///
 /// And Dart → native (pushed by the SDK, not a host request):
 /// - `log {severity, message}` → null — a diagnostic [LogEntry] delivered to

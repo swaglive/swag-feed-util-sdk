@@ -431,9 +431,9 @@ class LivestreamSdkImpl implements LivestreamSdk {
     return query.isEmpty ? '$base' : '$base?$query';
   }
 
-  /// Builds the query string the livestream web page expects: one repeated
-  /// `config` param per tracker remote-config override, each valued
-  /// `KEY:::VALUE`. Empty when there are no overrides.
+  /// Builds the query string the livestream web page expects: the required
+  /// `mdm=1` flag, then one repeated `config` param per tracker remote-config
+  /// override, each valued `KEY:::VALUE`. Never empty.
   ///
   /// Values are form-encoded ([Uri.encodeQueryComponent]: space → `+`), then
   /// `:` `/` `,` are restored — they are legal in a query per RFC 3986 and the
@@ -446,11 +446,12 @@ class LivestreamSdkImpl implements LivestreamSdk {
   static String buildLivestreamWebQuery(
     Map<String, String> remoteConfigOverrides,
   ) {
-    final buffer = StringBuffer();
+    // mdm=1 is required for the web page to function (QA finding 2026-07-15);
+    // otp is deliberately NOT sent.
+    final buffer = StringBuffer('mdm=1');
     for (final entry in remoteConfigOverrides.entries) {
-      if (buffer.isNotEmpty) buffer.write('&');
       buffer
-        ..write('config=')
+        ..write('&config=')
         ..write(_encodeWebQueryValue('${entry.key}:::${entry.value}'));
     }
     return buffer.toString();
