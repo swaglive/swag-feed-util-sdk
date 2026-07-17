@@ -24,9 +24,12 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
     required Uri apiBase,
     required Dio httpClient,
     void Function(String message)? onWarning,
+    void Function(String stage, Uri uri, Response<dynamic> response)?
+    onResponse,
   }) : _apiBase = apiBase,
        _http = httpClient,
-       _onWarning = onWarning;
+       _onWarning = onWarning,
+       _onResponse = onResponse;
 
   final Uri _apiBase;
   final Dio _http;
@@ -36,6 +39,26 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
   /// this package free of any logger dependency; feed_util bridges it to its
   /// SDK-wide log.
   final void Function(String message)? _onWarning;
+
+  /// Optional debugging hook receiving the raw dio [Response] of the
+  /// feed-list fetch ([onResponseStageFeedList]) and each `/sessions`
+  /// enrichment batch ([onResponseStageSchedules]). `uri` is the full request
+  /// URL as built here (more reliable than `response.requestOptions`); the
+  /// response carries status, headers and the decoded body exactly as the
+  /// backend sent it — invoked *before* mapping, so entries the mappers
+  /// silently skip are still visible.
+  ///
+  /// Passed structured (not pre-formatted) so the sink decides per stage what
+  /// is worth stringifying (e.g. feed_util condenses the `/sessions` body to
+  /// its id list). No-op when null; like [_onWarning], this keeps the package
+  /// free of any logger dependency.
+  final void Function(String stage, Uri uri, Response<dynamic> response)?
+  _onResponse;
+
+  /// Stage names handed to the `onResponse` hook, public so sinks can branch
+  /// on them without duplicating string literals.
+  static const onResponseStageFeedList = 'getLivestreamList';
+  static const onResponseStageSchedules = 'fetchStreamSchedules';
 
   /// `/sessions` accepts 1–100 `user_id` values per request (BE API GENP-3379).
   static const _sessionBatchSize = 100;
@@ -103,6 +126,9 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
           cancelToken: cancelToken,
         ),
       );
+      // Emitted before shape validation/mapping so a malformed body (or an
+      // entry the lenient mapping below drops) is still observable.
+      _onResponse?.call(onResponseStageFeedList, uri, response);
       final data = response.data;
       if (data is! List) {
         throw const FormatException(
@@ -156,14 +182,21 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
     CancelToken? cancelToken,
   ) async {
     try {
-      final path = _buildUri('sessions', {
+      final uri = _buildUri('sessions', {
         _paramUserId: streamerIds,
         _paramInclude: [_includeLivestreamDetail],
         _paramLimit: [streamerIds.length.toString()],
-      }).toString();
+      });
       final response = await _http.fetch<dynamic>(
-        RequestOptions(path: path, method: 'GET', cancelToken: cancelToken),
+        RequestOptions(
+          path: uri.toString(),
+          method: 'GET',
+          cancelToken: cancelToken,
+        ),
       );
+      // Same pre-mapping raw dump as the feed-list fetch: sessions this
+      // method skips (missing streamer) or drops (non-List body) stay visible.
+      _onResponse?.call(onResponseStageSchedules, uri, response);
       final data = response.data;
       if (data is! List) return const {};
       final result = <String, StreamSchedule>{};

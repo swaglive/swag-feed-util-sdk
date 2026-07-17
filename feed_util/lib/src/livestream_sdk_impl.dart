@@ -166,6 +166,13 @@ class LivestreamSdkImpl implements LivestreamSdk {
       // batch, whose streamers then classify as offline and get filtered)
       // that the repository otherwise swallows.
       onWarning: _log.warning,
+      // Raw responses of the feed-list fetch and each /sessions enrichment
+      // batch, pre-mapping (so entries the lenient mappers drop are still
+      // visible). Formatting is per stage — see _logRawResponse. Gated on
+      // hasListener: unlike the other call sites' cheap interpolations,
+      // stringifying a whole response body is expensive, so it's skipped
+      // entirely when nobody is debugging.
+      onResponse: _logRawResponse,
     );
 
     // Resolve the config path to the real feed path on the first page only;
@@ -280,6 +287,47 @@ class LivestreamSdkImpl implements LivestreamSdk {
     return uri
         .replace(queryParameters: {...uri.queryParameters, '_ts': ts})
         .toString();
+  }
+
+  /// Bridges the feed repository's `onResponse` debugging hook onto the
+  /// SDK-wide log at debug severity. Formatting is per stage:
+  ///
+  ///  * **feed list** — one entry with the full request URL and the raw
+  ///    decoded body (the page content itself is what's being debugged);
+  ///  * **`/sessions` enrichment** — two entries: the request URL, then the
+  ///    transport metadata (status + headers) with the body condensed to its
+  ///    element id list. The full livestream_detail payload is bulky and its
+  ///    interesting failure mode is *which* sessions came back (an id absent
+  ///    here classifies that streamer as offline), not their field contents.
+  ///
+  /// The hook hands over the structured [Response] (not a pre-built string)
+  /// exactly so this bridge can bail out before anything is stringified when
+  /// no log sink is attached.
+  void _logRawResponse(String stage, Uri uri, Response<dynamic> response) {
+    if (!_log.hasListener) return;
+    if (stage ==
+        sdk_core.DioLivestreamFeedRepository.onResponseStageSchedules) {
+      _log.debug('$stage: url $uri');
+      _log.debug(
+        '$stage: status=${response.statusCode}, '
+        'ids=${_responseBodyIds(response.data)}, '
+        'headers=${response.headers.map}',
+      );
+    } else {
+      _log.debug('$stage: response ($uri) → ${response.data}');
+    }
+  }
+
+  /// Condenses a JSON-array response body to the `id` of each element, the
+  /// shape [_logRawResponse] logs for `/sessions`. Non-list bodies and
+  /// non-map / id-less elements are annotated rather than dropped, so a
+  /// malformed body is still evident from the log line.
+  static Object _responseBodyIds(Object? data) {
+    if (data is! List) return '<non-list body: ${data.runtimeType}>';
+    return [
+      for (final element in data)
+        if (element is Map) element['id'] ?? '<no id>' else '<non-map>',
+    ];
   }
 
   /// Maps a core [sdk_core.Livestream] to the SDK's wire [LivestreamItem].

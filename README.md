@@ -24,7 +24,7 @@ dependencies:
     git:
       url: https://github.com/swaglive/swag-feed-util-sdk.git
       path: feed_util
-      ref: v0.7.0        # pin a tag
+      ref: v0.8.0        # pin a tag
 ```
 
 Use the SDK directly — no MethodChannel on a Flutter host:
@@ -104,7 +104,7 @@ dependencyResolutionManagement {
     repositories {
         google(); mavenCentral()
         // The SDK's committed Maven repo, straight off GitHub (public repo).
-        maven(url = uri("https://raw.githubusercontent.com/swaglive/swag-feed-util-sdk/v0.7.0/android/aar-repo"))
+        maven(url = uri("https://raw.githubusercontent.com/swaglive/swag-feed-util-sdk/v0.8.0/android/aar-repo"))
         // Flutter engine artifacts referenced by the AAR poms.
         maven(url = "https://storage.googleapis.com/download.flutter.io")
     }

@@ -34,13 +34,21 @@ class FeedUtilLog {
   /// [FeedUtilChannel]; not part of the public API.
   void bindNativeSink(FeedUtilLogCallback? sink) => _nativeSink = sink;
 
+  /// Whether any sink (Dart callback or native bridge) is registered.
+  ///
+  /// Emitting is already a no-op without a listener, but the *message string*
+  /// is built eagerly at each call site — so call sites whose message is
+  /// expensive to build (e.g. raw response-body dumps) should check this
+  /// first and skip the interpolation entirely.
+  bool get hasListener => _dartCallback != null || _nativeSink != null;
+
   /// Emits [message] at [severity] to every registered sink.
   ///
   /// A no-op when no sink is registered (avoids building an entry no one
   /// receives). A throwing sink is isolated so one bad listener can't break
   /// delivery to the other sink or the calling code path.
   void emit(LogSeverity severity, String message) {
-    if (_dartCallback == null && _nativeSink == null) return;
+    if (!hasListener) return;
     final entry = LogEntry(severity: severity, message: message);
     _deliver(_dartCallback, entry);
     _deliver(_nativeSink, entry);

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.8.0  (2026-07-17, source f7bf1e9a)
+
+- 94b2b2f2 [GENP-3261] 增加直播資訊的 log (#1298)
+
 ## v0.7.0  (2026-07-15, source 30141769)
 
 - 30141769 Support livestream auto play (#1283)
