@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.9.1  (2026-09-16, source 2e3f6cc7)
+範例 App 修正:點卡片不再要求輸入 OTP(開發用預設值);Android 直播間頁面避開狀態列與導覽列。SDK 介面無變更。
+
+- 2e3f6cc7 fix(feed_util): 範例 App 固定開發用 OTP,直播間 WebView 避開系統列 (#1345)
+
 ## v0.9.0  (2026-09-16, source d1817265)
 
 - d1817265 fix(feed_util): publish-only 的版號檢查改看真正被 stamp 的兩份整合文件 (#1344)

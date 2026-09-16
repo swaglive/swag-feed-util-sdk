@@ -2,9 +2,13 @@ package live.swag.feedutil.example;
 
 import android.app.Activity;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.net.http.SslError;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
+import android.widget.FrameLayout;
 import android.webkit.SslErrorHandler;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -98,7 +102,28 @@ public final class WebViewActivity extends Activity {
             }
         });
 
-        setContentView(webView);
+        // targetSdk 36 draws edge-to-edge and Android WebView does not expose
+        // safe-area insets to the page, so keep the WebView clear of the status
+        // bar (top) and navigation bar (bottom) ourselves — same as MainActivity.
+        // The padding goes on a wrapper: WebView ignores its own padding.
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
+        root.addView(webView);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            int top, bottom;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
+                top = bars.top;
+                bottom = bars.bottom;
+            } else {
+                top = insets.getSystemWindowInsetTop();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            v.setPadding(0, top, 0, bottom);
+            return insets;
+        });
+
+        setContentView(root);
 
         String url = getIntent().getStringExtra(EXTRA_URL);
         if (url != null) {

@@ -51,6 +51,12 @@ import live.swag.feedutil.ResultCallback;
 public class MainActivity extends Activity {
 
     private static final String FEED_ID = "user_livestream-v2";
+    /**
+     * Development-only OTP used for every card tap so testers don't retype one.
+     * Leave empty to get the paste dialog instead. A production host fetches a
+     * fresh single-use OTP from its own server on each tap.
+     */
+    private static final String DEV_OTP = "abcd1234";
     private static final List<String> TRACKER_SERVERS = Arrays.asList(
             "138.113.217.111",
             "138.113.217.43",
@@ -315,6 +321,11 @@ public class MainActivity extends Activity {
      * {@code mediaPlaybackRequiresUserGesture = false} and let the stream autoplay.
      */
     private void openUrl(String id) {
+        if (!DEV_OTP.isEmpty()) {
+            openUrlWithOtp(id, DEV_OTP);
+            return;
+        }
+
         EditText otpInput = new EditText(this);
         otpInput.setHint("Single-use OTP");
         otpInput.setSingleLine(true);

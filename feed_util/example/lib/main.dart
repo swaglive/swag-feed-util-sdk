@@ -29,6 +29,11 @@ void main() {
 /// The livestream feed id under test.
 const String _feedId = 'user_livestream-v2';
 
+/// Development-only OTP used for every card tap so testers don't retype one.
+/// Leave empty to get the paste dialog instead. A production host fetches a
+/// fresh single-use OTP from its own server on each tap.
+const String _devOtp = 'abcd1234';
+
 /// Resource labels sent to the tracker so it only returns CN-optimized
 /// resources — the SDK targets CN users. Deliberately without the internal
 /// builds' extra `dev` label, which would admit dev-labeled resources.
@@ -135,10 +140,12 @@ class _FeedPageState extends State<FeedPage> {
   }
 
   Future<void> _openLivestream(LivestreamItem item) async {
-    final otp = await showDialog<String>(
-      context: context,
-      builder: (_) => const _OtpInputDialog(),
-    );
+    final otp = _devOtp.isNotEmpty
+        ? _devOtp
+        : await showDialog<String>(
+            context: context,
+            builder: (_) => const _OtpInputDialog(),
+          );
     if (!mounted || otp == null) return;
 
     final String url;

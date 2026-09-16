@@ -35,8 +35,10 @@ The example feed id and non-secret tracker hosts are declared near the top of
 [`lib/main.dart`](lib/main.dart). Replace them only when Swag gives you values
 for a different environment.
 
-The card-tap dialog is development-only. Paste a fresh test OTP supplied via
-the backend team's convenience flow. A production host fetches one from its
+The example ships with a development-only default OTP (`_devOtp` near the top
+of `lib/main.dart`) so every card tap opens the room without typing. Set it to
+an empty string to get the paste dialog instead, then paste a fresh test OTP
+supplied via the backend team's convenience flow. A production host fetches one from its
 own server on each tap; the mobile app never stores an affiliate signing key
 or implements the signed server-to-server request.
 

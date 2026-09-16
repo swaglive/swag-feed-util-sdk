@@ -22,7 +22,7 @@ dependencyResolutionManagement {
         maven(
             url = uri(
                 "https://raw.githubusercontent.com/" +
-                    "swaglive/swag-feed-util-sdk/v0.9.0/android/aar-repo"
+                    "swaglive/swag-feed-util-sdk/v0.9.1/android/aar-repo"
             )
         )
         maven(url = "https://storage.googleapis.com/download.flutter.io")

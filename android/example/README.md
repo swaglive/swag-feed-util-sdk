@@ -49,8 +49,10 @@ artifacts from the sibling `../aar-repo` and the Flutter engine repository.
 Editing `feed_util` Dart source therefore does not change what this example
 runs; use a newer published release to test a different AAR.
 
-The card-tap dialog is development-only. Paste a fresh test OTP supplied via
-the backend team's convenience flow. A production host fetches one from its
+The example ships with a development-only default OTP (`DEV_OTP` in
+`MainActivity.java`) so every card tap opens the room without typing. Set it to
+an empty string to get the paste dialog instead, then paste a fresh test OTP
+supplied via the backend team's convenience flow. A production host fetches one from its
 own server on each tap; it never places the affiliate signing key on the
 device or implements the signed server-to-server exchange in mobile code.
 
