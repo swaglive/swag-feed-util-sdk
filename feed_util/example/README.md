@@ -1,36 +1,72 @@
-# FeedUtilExample (Flutter host)
+# FeedUtil Flutter host example
 
-Standalone Flutter app that simulates an **external Flutter consumer** of the
-`feed_util` Livestream SDK: it adds `feed_util` as a dependency and calls
-`LivestreamSdk` directly — no MethodChannel, no native bridge (that path is
-only for native hosts like `examples/android`). This is the **iOS integrator's
-path**.
+Runnable Flutter/iOS consumer of the public `feed_util` Dart API. It does not
+use the MethodChannel or Android facade.
 
-Pub package name is `feed_util_flutter_example` (it can't be the literal
-`flutter` — that collides with the Flutter SDK package); the folder is
-`flutter` to match `android/` and `ios/`.
+The example demonstrates:
+
+- creating one `LivestreamSdk` instance;
+- sanitized console diagnostics and error/retry states;
+- first-page loading, pull-to-refresh, and token pagination;
+- lazy decrypted cover images with placeholders;
+- card status, viewer, rating, badge, and funding metadata;
+- requesting a development OTP on each card tap and opening the one-use
+  SDK-built livestream URL in an in-app web view.
 
 ## Run
 
+Use Flutter with Dart 3.8 or newer. Add the tracker token when the target
+environment requires one.
+
 ```sh
-# from apps/feed_util/examples/flutter — real data needs the tracker auth token
-flutter run -d <ios-id> --dart-define=FEED_UTIL_TRACKER_AUTH_TOKEN=YOUR_TOKEN
-# or VS Code → "feed_util host example (iOS)"
+cd feed_util/example
+flutter pub get
+flutter devices
+flutter run -d <ios-device-id> \
+  --dart-define=FEED_UTIL_TRACKER_AUTH_TOKEN=<token-from-Swag>
 ```
 
-- Simulator needs no signing; a real device needs a signing team
-  (`open ios/Runner.xcworkspace`).
-- Hot reload works — being a Flutter host, no AAR/xcframework rebuild after Dart
-  edits (contrast the Android example).
+The SDK reads that define as its fallback token; the example does not write it
+to disk. Omit the `--dart-define` line when Swag did not provide a token for the
+environment. A simulator needs no signing. For a physical device, open
+`ios/Runner.xcworkspace` and select a signing team if prompted.
 
-The screen renders the live **`user_livestream-v2`** feed as a card grid
-(`getLivestreamList`), modeled on the in-app livestream tab: title, streamer,
-viewers, score, status badge, country flag. Cover images are placeholders until
-`getCoverImage` lands (WS-B/B6). Tapping a card shows its `buildLivestreamUrl`.
-Without the token the tracker can't resolve and you'll see the error view.
+The example feed id and non-secret tracker hosts are declared near the top of
+[`lib/main.dart`](lib/main.dart). Replace them only when Swag gives you values
+for a different environment.
 
-## How the dependency resolves
+The card-tap dialog is development-only. Paste a fresh test OTP supplied via
+the backend team's convenience flow. A production host fetches one from its
+own server on each tap; the mobile app never stores an affiliate signing key
+or implements the signed server-to-server request.
 
-This example is a **pub workspace member** (root `pubspec.yaml` `workspace:`
-list), so `feed_util: any` resolves to the local module. A real external app
-uses a git/published dependency instead — see `../../INTEGRATION.md`.
+## Dependency setup
+
+This example uses the sibling SDK source so local Dart changes are visible
+immediately:
+
+```yaml
+dependencies:
+  feed_util:
+    path: ../
+```
+
+An external application should use a pinned Git release instead. See the
+[Flutter integration guide](../../docs/flutter-integration.md).
+
+## Expected behavior
+
+The console first shows domain-resolution events. Active cards then appear in a
+two-column grid, covers replace their placeholders, and scrolling near the end
+loads another page when `nextToken` is present. Pull-to-refresh replaces page
+one; tapping a card asks for a fresh OTP and opens its web page once. Close the
+page and use a new OTP before opening any room again. The same console stream records main
+WebView page start/finish events and failed HTTP/network requests with stable
+`event=webview.*` codes.
+
+If the view is empty or reports `domain_unreachable`, inspect the sanitized
+events before changing UI code. Verify network connectivity, token, tracker
+hosts, and whether the feed currently contains active streams.
+For a blank or unreachable livestream page, look for an HTTP status or
+DNS/timeout/TLS categories in the `event=webview.*` entries. WebView URLs and
+free-form error descriptions never enter the diagnostic API.

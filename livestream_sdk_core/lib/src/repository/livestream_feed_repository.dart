@@ -20,17 +20,13 @@ abstract final class LivestreamFeedPaging {
 ///  * an `HttpRequestable`-backed adapter in packages/data — used by the
 ///    in-app home feed through the app's HTTP stack.
 abstract interface class LivestreamFeedRepository {
-  /// Resolves an entrypoint/config feed path to the real feed path by
-  /// following the backend redirect (returns its `Location` header value).
-  ///
-  /// Returns `null` when the redirect cannot be resolved.
-  Future<String?> resolveFeedPath(
-    String configPath, {
-    CancelToken? cancelToken,
-  });
-
   /// Fetches one page of the feed at [feedPath] (base [Livestream] entries,
   /// not yet enriched with live schedules).
+  ///
+  /// [feedPath] is the entrypoint/config feed path (e.g.
+  /// `user_livestream-v2?sorting=…`); its 302 to the current real feed is
+  /// followed per fetch and must never be captured/reused — a stored
+  /// redirect target goes stale once the backend expires that feed id.
   ///
   /// A `404` is treated as an empty page (matching web behavior).
   Future<List<Livestream>> getLivestreamList({

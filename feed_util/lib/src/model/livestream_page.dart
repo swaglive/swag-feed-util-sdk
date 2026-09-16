@@ -4,8 +4,10 @@ import 'livestream_item.dart';
 ///
 /// Never inspect or construct one yourself: pass `null` (no token) to
 /// [LivestreamSdk.getLivestreamList] for the first page, then hand back
-/// [LivestreamPage.nextToken] verbatim for each following page. Safe to
-/// serialize and restore (it's a plain string) if you persist scroll state.
+/// [LivestreamPage.nextToken] verbatim for each following page. In addition to
+/// the next backend page, it carries ids already returned in this pagination
+/// chain so later pages can suppress duplicates. Safe to serialize and restore
+/// (it's a plain string) if you persist scroll state.
 extension type const PageToken(String raw) {}
 
 /// One page of the livestream feed.

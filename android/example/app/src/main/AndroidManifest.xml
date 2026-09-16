@@ -4,17 +4,17 @@
     <!-- Required for the SDK's network calls. Flutter's DEBUG AAR injects this
          automatically, but the RELEASE AAR does not — without it a release
          build has no network and the feed fails with
-         domain_tracker_server_not_found. -->
+         domain_unreachable. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:name=".ExampleApp"
         android:label="FeedUtil Example"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:theme="@android:style/Theme.Material">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

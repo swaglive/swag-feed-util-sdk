@@ -9,7 +9,7 @@ publish_to: none
 environment:
   sdk: ^3.8.0
 
-# Minimal-dependency policy (mirrors apps/feed_util/pubspec.yaml): this
+# Minimal-dependency policy: this
 # package ships inside the add-to-app SDK artifacts, so runtime deps stay at
 # dio + model annotations + webcrypto (the only native-code dependency, for
 # AES cover decryption). get_it / sentry / log_kit / shared_preferences are
@@ -22,7 +22,7 @@ dependencies:
   # AesDecryptFusedTransformer. webcrypto is Dart-SDK compatible (deps: ffi +
   # native_toolchain_cmake, no Flutter), so this package stays Flutter-free;
   # it does add a native (BoringSSL) build step. Constraint matches
-  # apps/feed_util to avoid a workspace resolution split.
+  # feed_util to keep one compatible dependency resolution.
   webcrypto: ^0.5.8
 
 dev_dependencies:

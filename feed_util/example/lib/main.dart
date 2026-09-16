@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -6,15 +7,32 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
+import 'livestream_web_view_lifecycle.dart';
+
 /// External Flutter consumer of the feed_util Livestream SDK: adds `feed_util`
 /// as a dependency and calls [LivestreamSdk] directly — no MethodChannel.
 ///
 /// Real data needs the tracker auth token, baked at build time:
 ///   flutter run --dart-define=FEED_UTIL_TRACKER_AUTH_TOKEN=YOUR_TOKEN
-void main() => runApp(const ExampleApp());
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  final sdk = LivestreamSdk(
+    const LivestreamSdkConfig(
+      trackerServers: _trackerServers,
+      trackerLabels: _trackerLabels,
+      debugMode: true,
+    ),
+  );
+  runApp(ExampleApp(sdk: sdk));
+}
 
 /// The livestream feed id under test.
 const String _feedId = 'user_livestream-v2';
+
+/// Resource labels sent to the tracker so it only returns CN-optimized
+/// resources — the SDK targets CN users. Deliberately without the internal
+/// builds' extra `dev` label, which would admit dev-labeled resources.
+const List<String> _trackerLabels = ['cn'];
 
 /// Real Swag domain-tracker config servers (global env; non-secret hosts).
 const List<String> _trackerServers = [
@@ -26,7 +44,9 @@ const List<String> _trackerServers = [
 ];
 
 class ExampleApp extends StatelessWidget {
-  const ExampleApp({super.key});
+  const ExampleApp({required this.sdk, super.key});
+
+  final LivestreamSdk sdk;
 
   @override
   Widget build(BuildContext context) {
@@ -38,56 +58,46 @@ class ExampleApp extends StatelessWidget {
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF121212),
       ),
-      home: const FeedPage(),
+      home: FeedPage(sdk: sdk),
     );
   }
 }
 
 class FeedPage extends StatefulWidget {
-  const FeedPage({super.key});
+  const FeedPage({required this.sdk, super.key});
+
+  final LivestreamSdk sdk;
 
   @override
   State<FeedPage> createState() => _FeedPageState();
 }
 
 class _FeedPageState extends State<FeedPage> {
-  final LivestreamSdk _sdk = LivestreamSdk(
-    const LivestreamSdkConfig(trackerServers: _trackerServers),
-  );
-
   final List<LivestreamItem> _items = [];
   PageToken? _nextToken;
   bool _loading = true;
   bool _loadingMore = false;
   String? _error;
+  bool _canRetry = false;
+
+  LivestreamSdk get _sdk => widget.sdk;
 
   @override
   void initState() {
     super.initState();
-    // Surface the SDK's diagnostic logs (domain-tracker stages, feed/cover API
-    // stages, errors) to the console so the demo doubles as a debugging aid.
-    _sdk.setLogListener(_printLog);
-    _refresh();
+    _loadFirstPage();
   }
 
-  @override
-  void dispose() {
-    _sdk.setLogListener(null);
-    super.dispose();
-  }
+  Future<void> _refresh() => _loadFirstPage(bustCache: true);
 
-  /// Prints each SDK [LogEntry] with its severity. `debugPrint` throttles high
-  /// volume and is stripped from release builds.
-  static void _printLog(LogEntry entry) =>
-      debugPrint('[feed_util][${entry.severity.name}] ${entry.message}');
-
-  Future<void> _refresh() async {
+  Future<void> _loadFirstPage({bool bustCache = false}) async {
     setState(() {
       _loading = true;
       _error = null;
+      _canRetry = false;
     });
     try {
-      final page = await _sdk.getLivestreamList(_feedId);
+      final page = await _sdk.getLivestreamList(_feedId, bustCache: bustCache);
       if (!mounted) return;
       setState(() {
         _items
@@ -96,10 +106,11 @@ class _FeedPageState extends State<FeedPage> {
         _nextToken = page.nextToken;
         _loading = false;
       });
-    } catch (e) {
+    } on LivestreamSdkException catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        _error = '${error.code.wireName}: ${error.message}';
+        _canRetry = error.code.isRetryable;
         _loading = false;
       });
     }
@@ -123,14 +134,31 @@ class _FeedPageState extends State<FeedPage> {
     }
   }
 
-  void _openLivestream(LivestreamItem item) {
+  Future<void> _openLivestream(LivestreamItem item) async {
+    final otp = await showDialog<String>(
+      context: context,
+      builder: (_) => const _OtpInputDialog(),
+    );
+    if (!mounted || otp == null) return;
+
+    final String url;
+    try {
+      url = _sdk.buildLivestreamUrl(item.id, otp: otp);
+    } on LivestreamSdkException catch (error) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${error.code.wireName}: ${error.message}')),
+      );
+      return;
+    }
+
     // Open the SDK-built livestream URL in an in-app web view (playback is a
     // web page — see the SDK model), rather than just surfacing the string.
-    Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => _LivestreamWebViewPage(
-          url: _sdk.buildLivestreamUrl(item.id),
+          url: url,
           title: item.displayName ?? item.username,
+          onLogEvent: _sdk.reportWebViewEvent,
         ),
       ),
     );
@@ -150,7 +178,10 @@ class _FeedPageState extends State<FeedPage> {
       // const branches stay const.
       body: switch ((_loading, _error, _items.isEmpty)) {
         (true, _, _) => const _LoadingView(),
-        (_, final error?, _) => _ErrorView(message: error, onRetry: _refresh),
+        (_, final error?, _) => _ErrorView(
+          message: error,
+          onRetry: _canRetry ? _refresh : null,
+        ),
         (_, _, true) => const _EmptyView(),
         _ => _FeedGrid(
           items: _items,
@@ -160,6 +191,56 @@ class _FeedPageState extends State<FeedPage> {
           onLoadCover: _sdk.getCoverImage,
         ),
       },
+    );
+  }
+}
+
+class _OtpInputDialog extends StatefulWidget {
+  const _OtpInputDialog();
+
+  @override
+  State<_OtpInputDialog> createState() => _OtpInputDialogState();
+}
+
+class _OtpInputDialogState extends State<_OtpInputDialog> {
+  final _controller = TextEditingController();
+  bool _isClosing = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _close([String? value]) async {
+    if (_isClosing) return;
+    _isClosing = true;
+
+    // Detach the text field from the IME before removing the dialog route.
+    // Some Android Flutter builds otherwise deactivate the dialog while the
+    // focused field still depends on its inherited focus/media-query nodes.
+    FocusManager.instance.primaryFocus?.unfocus();
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    Navigator.of(context).pop(value);
+  }
+
+  Future<void> _submit([String? value]) => _close(value ?? _controller.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Paste development OTP'),
+      content: TextField(
+        controller: _controller,
+        autocorrect: false,
+        decoration: const InputDecoration(labelText: 'Single-use OTP'),
+        onSubmitted: _submit,
+      ),
+      actions: [
+        TextButton(onPressed: _close, child: const Text('Cancel')),
+        FilledButton(onPressed: _submit, child: const Text('Open')),
+      ],
     );
   }
 }
@@ -565,7 +646,7 @@ class _ErrorView extends StatelessWidget {
   const _ErrorView({required this.message, required this.onRetry});
 
   final String message;
-  final VoidCallback onRetry;
+  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -578,8 +659,10 @@ class _ErrorView extends StatelessWidget {
             const Icon(Icons.error_outline, color: Color(0xFFE57373), size: 40),
             const SizedBox(height: 12),
             Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: 16),
-            FilledButton(onPressed: onRetry, child: const Text('Retry')),
+            if (onRetry != null) ...[
+              const SizedBox(height: 16),
+              FilledButton(onPressed: onRetry, child: const Text('Retry')),
+            ],
           ],
         ),
       ),
@@ -591,10 +674,15 @@ class _ErrorView extends StatelessWidget {
 /// tapped card. Mirrors the SDK model: playback is just a web view opened with
 /// [LivestreamSdk.buildLivestreamUrl].
 class _LivestreamWebViewPage extends StatefulWidget {
-  const _LivestreamWebViewPage({required this.url, required this.title});
+  const _LivestreamWebViewPage({
+    required this.url,
+    required this.title,
+    required this.onLogEvent,
+  });
 
   final String url;
   final String title;
+  final ValueChanged<WebViewLogEvent> onLogEvent;
 
   @override
   State<_LivestreamWebViewPage> createState() => _LivestreamWebViewPageState();
@@ -602,6 +690,7 @@ class _LivestreamWebViewPage extends StatefulWidget {
 
 class _LivestreamWebViewPageState extends State<_LivestreamWebViewPage> {
   late final WebViewController _controller;
+  late final LivestreamWebViewLifecycle _webViewLifecycle;
 
   @override
   void initState() {
@@ -620,14 +709,85 @@ class _LivestreamWebViewPageState extends State<_LivestreamWebViewPage> {
 
     _controller = WebViewController.fromPlatformCreationParams(params)
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (_) {
+            widget.onLogEvent(const WebViewLogEvent.pageStarted());
+          },
+          onPageFinished: (_) {
+            widget.onLogEvent(const WebViewLogEvent.pageFinished());
+          },
+          onHttpError: (error) {
+            widget.onLogEvent(
+              WebViewLogEvent.httpError(statusCode: error.response?.statusCode),
+            );
+          },
+          onWebResourceError: (error) {
+            if (!shouldReportLivestreamWebViewError(error)) return;
+            widget.onLogEvent(
+              WebViewLogEvent.networkError(
+                errorCode: error.errorCode,
+                errorType: webViewNetworkErrorType(error),
+                isForMainFrame: error.isForMainFrame,
+              ),
+            );
+          },
+          onSslAuthError: (error) {
+            widget.onLogEvent(
+              WebViewLogEvent.networkError(
+                errorType: WebViewNetworkErrorType.tls,
+              ),
+            );
+            // Registering this callback transfers the decision to the host.
+            // Preserve the WebView's secure default and never trust an invalid
+            // certificate merely to keep the livestream loading.
+            unawaited(error.cancel());
+          },
+        ),
+      )
       ..loadRequest(Uri.parse(widget.url));
+
+    _webViewLifecycle = LivestreamWebViewLifecycle(
+      runJavaScript: _controller.runJavaScript,
+      loadRequest: _controller.loadRequest,
+    );
+  }
+
+  @override
+  void dispose() {
+    // Covers programmatic route removal and any pop path that bypasses the
+    // PopScope callback. The lifecycle is idempotent.
+    unawaited(_webViewLifecycle.stop());
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(widget.title)),
-      body: WebViewWidget(controller: _controller),
+    return PopScope<void>(
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) unawaited(_webViewLifecycle.stop());
+      },
+      child: Scaffold(
+        appBar: AppBar(title: Text(widget.title)),
+        body: WebViewWidget(controller: _controller),
+      ),
     );
   }
 }
+
+/// WebKit reports normal navigation cancellation as NSURLErrorCancelled
+/// (`-999`). It commonly occurs during redirects or when leaving the page and
+/// is not a connectivity failure worth surfacing to integrators.
+bool shouldReportLivestreamWebViewError(WebResourceError error) =>
+    error.errorCode != -999;
+
+WebViewNetworkErrorType webViewNetworkErrorType(WebResourceError error) =>
+    switch (error.errorType?.name) {
+      'hostLookup' => WebViewNetworkErrorType.dns,
+      'timeout' => WebViewNetworkErrorType.timeout,
+      'connect' => WebViewNetworkErrorType.connection,
+      'failedSslHandshake' => WebViewNetworkErrorType.tls,
+      'notConnectedToInternet' => WebViewNetworkErrorType.offline,
+      'cancelled' => WebViewNetworkErrorType.cancelled,
+      _ => WebViewNetworkErrorType.unknown,
+    };

@@ -24,13 +24,6 @@
       },
       "dependencies": [
         {
-          "group": "com.example.feed_util",
-          "module": "flutter_release",
-          "version": {
-            "requires": "1.0"
-          }
-        },
-        {
           "group": "org.jetbrains.kotlin",
           "module": "kotlin-stdlib",
           "version": {
@@ -42,11 +35,11 @@
         {
           "name": "feed-util-1.0.aar",
           "url": "feed-util-1.0.aar",
-          "size": 30360,
-          "sha512": "f8c66a16d238c43e9e542e29493724401178fbb14b6a16a7f3cf8e1c673dc33c5872d316f6013495362bdcf876a1ff6b74ea492d20b81d296ba653afc03d5c83",
-          "sha256": "2abf897353c775038030cc7da6165ce629446d715119b1ad83e36cc9d858b711",
-          "sha1": "2849e272d21aae896ce5279a30f4590de556a037",
-          "md5": "901e9e6eb3a7154ce1dfdd00e760e689"
+          "size": 53689,
+          "sha512": "552bc581a1627cdae78343bb59661a5ec772d2a9e32bc7e0e80781effdaa65772203883eba65ea1908c38a93798af36e64a9d5f8bac693fedb7a2bea5ad7b4c5",
+          "sha256": "ffe53814957cf9195147f2260708cf522baf17c9128b5499f5851db879cbb6ba",
+          "sha1": "9797ab72fcc6d53e1048c89d114ad7a4bb6170bd",
+          "md5": "ac09bfb71cc31dd7bc4afeddfa721707"
         }
       ]
     },
@@ -78,11 +71,11 @@
         {
           "name": "feed-util-1.0.aar",
           "url": "feed-util-1.0.aar",
-          "size": 30360,
-          "sha512": "f8c66a16d238c43e9e542e29493724401178fbb14b6a16a7f3cf8e1c673dc33c5872d316f6013495362bdcf876a1ff6b74ea492d20b81d296ba653afc03d5c83",
-          "sha256": "2abf897353c775038030cc7da6165ce629446d715119b1ad83e36cc9d858b711",
-          "sha1": "2849e272d21aae896ce5279a30f4590de556a037",
-          "md5": "901e9e6eb3a7154ce1dfdd00e760e689"
+          "size": 53689,
+          "sha512": "552bc581a1627cdae78343bb59661a5ec772d2a9e32bc7e0e80781effdaa65772203883eba65ea1908c38a93798af36e64a9d5f8bac693fedb7a2bea5ad7b4c5",
+          "sha256": "ffe53814957cf9195147f2260708cf522baf17c9128b5499f5851db879cbb6ba",
+          "sha1": "9797ab72fcc6d53e1048c89d114ad7a4bb6170bd",
+          "md5": "ac09bfb71cc31dd7bc4afeddfa721707"
         }
       ]
     }

@@ -3,12 +3,18 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:dio_cache_interceptor/dio_cache_interceptor.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:livestream_sdk_core/livestream_sdk_core.dart' as sdk_core;
 
+import 'diagnostics/feed_util_diagnostics.dart';
+import 'http/body_stall_timeout_adapter.dart';
+import 'http/request_timeouts_interceptor.dart';
 import 'livestream_sdk.dart';
+import 'livestream_sdk_exception.dart';
 import 'log/feed_util_domain_tracker_logger.dart';
-import 'log/feed_util_log.dart';
+import 'log/web_view_log_event.dart';
 import 'model/livestream_item.dart';
 import 'model/livestream_page.dart';
 
@@ -33,12 +39,32 @@ class LivestreamSdkImpl implements LivestreamSdk {
   /// [httpClient] is a seam for tests; defaults to a client with the
   /// tracker Bearer-token and time-profiling interceptors installed
   /// (the tracker's ttfb measurement depends on the latter).
-  LivestreamSdkImpl(this._config, {Dio? httpClient})
-    : _http = httpClient ?? _defaultHttpClient(_config),
-      _ownsHttpClient = httpClient == null {
+  LivestreamSdkImpl(
+    this._config, {
+    Dio? httpClient,
+    FeedUtilDiagnosticPlatform diagnosticPlatform =
+        FeedUtilDiagnosticPlatform.flutter,
+    FeedUtilDiagnosticOutput? diagnosticOutput,
+  }) : _diagnostics = FeedUtilDiagnostics(
+         enabled: _config.debugMode,
+         platform: diagnosticPlatform,
+         output: diagnosticOutput,
+       ),
+       _http = httpClient ?? defaultHttpClient(_config),
+       _ownsHttpClient = httpClient == null {
+    if (_config.trackerServers.isEmpty ||
+        _config.trackerServers.any((server) => server.trim().isEmpty)) {
+      throw const LivestreamSdkException(
+        LivestreamSdkErrorCode.invalidArgument,
+      );
+    }
+    _diagnostics.configured(
+      trackerServers: _config.trackerServers.length,
+      trackerLabels: _config.trackerLabels?.length ?? 0,
+    );
     // Only augment the client we create ourselves. An injected [httpClient]
     // (test seam / shared Dio) is left exactly as the caller configured it — we
-    // neither replace its transformer (set in _defaultHttpClient) nor add the
+    // neither replace its transformer (set in defaultHttpClient) nor add the
     // EncryptedDomainInterceptor to it, so we can't mutate a shared client or
     // register a duplicate interceptor on one the caller already set up.
     if (httpClient == null) {
@@ -66,6 +92,7 @@ class LivestreamSdkImpl implements LivestreamSdk {
 
   final LivestreamSdkConfig _config;
   final Dio _http;
+  final FeedUtilDiagnostics _diagnostics;
 
   /// Whether we created [_http] ourselves (vs. an injected test seam / shared
   /// Dio). Only an owned client is mutated: its transformer is swapped for one
@@ -73,13 +100,6 @@ class LivestreamSdkImpl implements LivestreamSdk {
   /// client is left exactly as the caller configured it — the same rule the
   /// constructor applies to the cache/reroute interceptors.
   final bool _ownsHttpClient;
-
-  /// SDK-wide diagnostic log sink. Delivery is a no-op until a host registers a
-  /// Dart listener ([setLogListener]) or the native bridge binds its sink, so
-  /// with nobody debugging only the fan-out is skipped — the message strings are
-  /// still built eagerly at each call site (interpolation, toString), so keep
-  /// them cheap.
-  FeedUtilLog get _log => FeedUtilLog.instance;
 
   /// Single-flight guard + cache for domain resolution.
   Completer<_ResolvedBases>? _resolving;
@@ -95,6 +115,13 @@ class LivestreamSdkImpl implements LivestreamSdk {
   /// cover is fetched lazily by [getCoverImage]. Keyed by id, so re-listing a
   /// stream refreshes its path; the map is small (paths are short strings).
   final Map<String, String> _snapshotPathById = {};
+
+  /// Public web routes address creators by username (`/u/{username}`), while
+  /// the SDK API intentionally accepts the stable livestream/user id returned
+  /// by [getLivestreamList]. Keep the association from every fetched page so
+  /// [buildLivestreamUrl] can bridge those two contracts without making hosts
+  /// perform their own lookup.
+  final Map<String, String> _usernameById = {};
 
   /// Per-id de-duplication of concurrent cover fetches, so a fast scroll that
   /// requests the same cover twice only fetches (and decrypts) it once.
@@ -154,61 +181,65 @@ class LivestreamSdkImpl implements LivestreamSdk {
     PageToken? pageToken,
     bool bustCache = false,
   }) async {
-    _log.info(
-      'getLivestreamList: start (feedId=$feedId, '
-      'firstPage=${pageToken == null}, bustCache=$bustCache)',
-    );
-    final bases = await _resolveBases();
+    final trace = _diagnostics.startTrace();
+    if (feedId.isEmpty) {
+      _diagnostics.feedFetchFailed(
+        trace,
+        FeedUtilDiagnosticError.invalidArgument,
+      );
+      throw const LivestreamSdkException(
+        LivestreamSdkErrorCode.invalidArgument,
+      );
+    }
+    final String feedPath;
+    final int page;
+    final Set<String> seenIds;
+    if (pageToken == null) {
+      feedPath = feedId;
+      page = 1;
+      // No cursor means a new pagination chain, including pull-to-refresh.
+      seenIds = <String>{};
+    } else {
+      try {
+        final cursor = _FeedCursor.decode(pageToken);
+        feedPath = cursor.feedPath;
+        page = cursor.page;
+        seenIds = cursor.seenIds.toSet();
+      } catch (_) {
+        _diagnostics.feedFetchFailed(
+          trace,
+          FeedUtilDiagnosticError.invalidArgument,
+        );
+        throw const LivestreamSdkException(
+          LivestreamSdkErrorCode.invalidArgument,
+        );
+      }
+    }
+    _diagnostics.feedFetchStarted(trace, page: page, bustCache: bustCache);
+
+    final _ResolvedBases bases;
+    try {
+      bases = await _resolveBases();
+    } on Object catch (error) {
+      final safe = _toPublicException(error);
+      _diagnostics.feedFetchFailed(trace, _diagnosticError(safe.code));
+      throw safe;
+    }
     final repository = _feedRepository ??= sdk_core.DioLivestreamFeedRepository(
       apiBase: bases.api,
       httpClient: _http,
-      // Surface best-effort failures (e.g. a dropped /sessions schedule
-      // batch, whose streamers then classify as offline and get filtered)
-      // that the repository otherwise swallows.
-      onWarning: _log.warning,
-      // Raw responses of the feed-list fetch and each /sessions enrichment
-      // batch, pre-mapping (so entries the lenient mappers drop are still
-      // visible). Formatting is per stage — see _logRawResponse. Gated on
-      // hasListener: unlike the other call sites' cheap interpolations,
-      // stringifying a whole response body is expensive, so it's skipped
-      // entirely when nobody is debugging.
-      onResponse: _logRawResponse,
+      // The core warning contains ids and raw exception text. Discard it and
+      // emit only the fixed warning category.
+      onWarning: (_) => _diagnostics.feedEnrichmentWarning(),
+      // Observe only response status and collection size. URI, headers, body
+      // contents, and element ids are never read by diagnostics.
+      onResponse: _observeFeedResponse,
     );
-
-    // Resolve the config path to the real feed path on the first page only;
-    // subsequent pages carry it (and the next page number) inside the opaque
-    // [PageToken], so paging never re-runs the redirect.
-    final String feedPath;
-    final int page;
-    if (pageToken == null) {
-      _log.debug('getLivestreamList: resolving feed path (feedId=$feedId)');
-      final String? resolved;
-      try {
-        resolved = await repository.resolveFeedPath(feedId);
-      } catch (e) {
-        _log.error('getLivestreamList: feed-path resolution failed — $e');
-        rethrow;
-      }
-      if (resolved == null || resolved.isEmpty) {
-        _log.error(
-          'getLivestreamList: feed path did not resolve (feedId=$feedId)',
-        );
-        throw sdk_core.FeedPathResolutionException(feedId);
-      }
-      feedPath = resolved;
-      page = 1;
-      _log.debug('getLivestreamList: feed path resolved to "$feedPath"');
-    } else {
-      final cursor = _FeedCursor.decode(pageToken);
-      feedPath = cursor.feedPath;
-      page = cursor.page;
-    }
 
     // A cache-buster is added as an extra query param on the feed path; the
     // repository preserves unknown query params, so it flows to the CDN edge.
     final requestPath = bustCache ? _withCacheBuster(feedPath) : feedPath;
 
-    _log.debug('getLivestreamList: fetching page $page (limit=$_pageSize)');
     final List<sdk_core.Livestream> base;
     try {
       base = await repository.getLivestreamList(
@@ -216,11 +247,11 @@ class LivestreamSdkImpl implements LivestreamSdk {
         page: page,
         limit: _pageSize,
       );
-    } catch (e) {
-      _log.error('getLivestreamList: feed request failed (page=$page) — $e');
-      rethrow;
+    } on Object catch (error) {
+      final safe = _toPublicException(error);
+      _diagnostics.feedFetchFailed(trace, _diagnosticError(safe.code));
+      throw safe;
     }
-    _log.debug('getLivestreamList: fetched ${base.length} raw item(s)');
 
     // Enrich with live schedules (title/snapshot/session/status/viewers/…) —
     // this is the packaged GetStreamSchedule logic (batch
@@ -230,9 +261,10 @@ class LivestreamSdkImpl implements LivestreamSdk {
       enriched = await sdk_core.EnrichLivestreamTitlesUseCase(
         repository,
       ).call(base);
-    } catch (e) {
-      _log.error('getLivestreamList: live-schedule enrichment failed — $e');
-      rethrow;
+    } on Object catch (error) {
+      final safe = _toPublicException(error);
+      _diagnostics.feedFetchFailed(trace, _diagnosticError(safe.code));
+      throw safe;
     }
     // Retain each stream's encrypted snapshot path for lazy getCoverImage.
     // Deliberately over the full enriched list (before the offline filter):
@@ -255,19 +287,37 @@ class LivestreamSdkImpl implements LivestreamSdk {
     // fallback). Note the /sessions batch fetch is best-effort: if it fails,
     // the unenriched entries all classify as offline and the page comes back
     // short (worst case empty) with paging intact via nextToken.
-    final visible = [
-      for (final livestream in enriched)
-        if (livestream.status != sdk_core.LivestreamStatus.offline) livestream,
-    ];
-    _log.info(
-      'getLivestreamList: returning ${visible.length} item(s) '
-      '(${enriched.length - visible.length} offline filtered)',
+    // Offset pagination over a live sort can move the same stream across page
+    // boundaries. Preserve feed order and keep only its first visible
+    // occurrence, both within this response and across earlier cursor pages.
+    // Offline ids are deliberately not recorded, so they may appear later if
+    // they become live.
+    final visible = <sdk_core.Livestream>[];
+    for (final livestream in enriched) {
+      if (livestream.status != sdk_core.LivestreamStatus.offline &&
+          seenIds.add(livestream.id)) {
+        visible.add(livestream);
+      }
+    }
+    for (final livestream in visible) {
+      if (livestream.username.isNotEmpty) {
+        _usernameById[livestream.id] = livestream.username;
+      }
+    }
+    _diagnostics.feedFetchCompleted(
+      trace,
+      itemCount: visible.length,
+      filteredCount: enriched.length - visible.length,
     );
 
     // A full page implies there may be more; a short page is the last one.
     // Derived from the RAW page length — filtering must not end paging early.
     final PageToken? nextToken = base.length >= _pageSize
-        ? _FeedCursor(feedPath: feedPath, page: page + 1).encode()
+        ? _FeedCursor(
+            feedPath: feedPath,
+            page: page + 1,
+            seenIds: seenIds.toList(growable: false),
+          ).encode()
         : null;
 
     return LivestreamPage(
@@ -289,45 +339,14 @@ class LivestreamSdkImpl implements LivestreamSdk {
         .toString();
   }
 
-  /// Bridges the feed repository's `onResponse` debugging hook onto the
-  /// SDK-wide log at debug severity. Formatting is per stage:
-  ///
-  ///  * **feed list** — one entry with the full request URL and the raw
-  ///    decoded body (the page content itself is what's being debugged);
-  ///  * **`/sessions` enrichment** — two entries: the request URL, then the
-  ///    transport metadata (status + headers) with the body condensed to its
-  ///    element id list. The full livestream_detail payload is bulky and its
-  ///    interesting failure mode is *which* sessions came back (an id absent
-  ///    here classifies that streamer as offline), not their field contents.
-  ///
-  /// The hook hands over the structured [Response] (not a pre-built string)
-  /// exactly so this bridge can bail out before anything is stringified when
-  /// no log sink is attached.
-  void _logRawResponse(String stage, Uri uri, Response<dynamic> response) {
-    if (!_log.hasListener) return;
-    if (stage ==
-        sdk_core.DioLivestreamFeedRepository.onResponseStageSchedules) {
-      _log.debug('$stage: url $uri');
-      _log.debug(
-        '$stage: status=${response.statusCode}, '
-        'ids=${_responseBodyIds(response.data)}, '
-        'headers=${response.headers.map}',
-      );
-    } else {
-      _log.debug('$stage: response ($uri) → ${response.data}');
-    }
-  }
-
-  /// Condenses a JSON-array response body to the `id` of each element, the
-  /// shape [_logRawResponse] logs for `/sessions`. Non-list bodies and
-  /// non-map / id-less elements are annotated rather than dropped, so a
-  /// malformed body is still evident from the log line.
-  static Object _responseBodyIds(Object? data) {
-    if (data is! List) return '<non-list body: ${data.runtimeType}>';
-    return [
-      for (final element in data)
-        if (element is Map) element['id'] ?? '<no id>' else '<non-map>',
-    ];
+  void _observeFeedResponse(String stage, Uri _, Response<dynamic> response) {
+    _diagnostics.feedResponseObserved(
+      schedules:
+          stage ==
+          sdk_core.DioLivestreamFeedRepository.onResponseStageSchedules,
+      statusCode: response.statusCode,
+      itemCount: response.data is List ? (response.data as List).length : 0,
+    );
   }
 
   /// Maps a core [sdk_core.Livestream] to the SDK's wire [LivestreamItem].
@@ -369,6 +388,11 @@ class LivestreamSdkImpl implements LivestreamSdk {
 
   @override
   Future<Uint8List?> getCoverImage(String livestreamId) {
+    if (livestreamId.isEmpty) {
+      return Future.error(
+        const LivestreamSdkException(LivestreamSdkErrorCode.invalidArgument),
+      );
+    }
     // Single-flight: join an in-progress fetch for the same id. Cross-call
     // caching + freshness is handled by the HTTP cache on [_http].
     final inFlight = _coverInFlight[livestreamId];
@@ -388,17 +412,30 @@ class LivestreamSdkImpl implements LivestreamSdk {
   /// snapshot path captured for this id, the public host isn't resolved yet, an
   /// empty body, or a 404.
   Future<Uint8List?> _fetchCover(String livestreamId) async {
+    final trace = _diagnostics.startTrace();
+    _diagnostics.coverFetchStarted(trace);
     final snapshotPath = _snapshotPathById[livestreamId];
     if (snapshotPath == null) {
-      _log.debug('getCoverImage: no snapshot for id=$livestreamId — skipped');
+      _diagnostics.coverFetchCompleted(
+        trace,
+        outcome: FeedUtilCoverOutcome.unavailable,
+      );
       return null; // stream has no snapshot
     }
 
-    final bases = await _resolveBases();
+    final _ResolvedBases bases;
+    try {
+      bases = await _resolveBases();
+    } on Object catch (error) {
+      final safe = _toPublicException(error);
+      _diagnostics.coverFetchFailed(trace, _diagnosticError(safe.code));
+      throw safe;
+    }
     final publicBase = bases.encryptedPublicBase ?? bases.publicBase;
     if (publicBase == null) {
-      _log.warning(
-        'getCoverImage: public host not resolved yet (id=$livestreamId)',
+      _diagnostics.coverFetchCompleted(
+        trace,
+        outcome: FeedUtilCoverOutcome.unavailable,
       );
       return null; // public host not resolved (B1)
     }
@@ -410,7 +447,6 @@ class LivestreamSdkImpl implements LivestreamSdk {
     );
 
     try {
-      _log.debug('getCoverImage: fetching cover (id=$livestreamId)');
       // _coverRequestOptions opts this request into the HTTP cache
       // (CachePolicy.request): a fresh cached cover is returned without a
       // network hit, a stale one is revalidated (304 -> cached bytes).
@@ -420,68 +456,128 @@ class LivestreamSdkImpl implements LivestreamSdk {
       );
       final data = response.data;
       if (data == null || data.isEmpty) {
-        _log.debug('getCoverImage: empty body (id=$livestreamId)');
+        _diagnostics.coverFetchCompleted(
+          trace,
+          outcome: FeedUtilCoverOutcome.empty,
+        );
         return null;
       }
-      _log.debug(
-        'getCoverImage: got ${data.length} byte(s) (id=$livestreamId)',
+      _diagnostics.coverFetchCompleted(
+        trace,
+        outcome: FeedUtilCoverOutcome.success,
       );
       return Uint8List.fromList(data);
-    } on DioException catch (e) {
-      if (e.response?.statusCode == 404) {
-        _log.debug('getCoverImage: 404 (id=$livestreamId)');
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 404) {
+        _diagnostics.coverFetchCompleted(
+          trace,
+          outcome: FeedUtilCoverOutcome.notFound,
+        );
         return null;
       }
-      _log.error('getCoverImage: fetch failed (id=$livestreamId) — $e');
-      rethrow;
+      final safe = _toPublicException(error);
+      _diagnostics.coverFetchFailed(trace, _diagnosticError(safe.code));
+      throw safe;
+    } on Object catch (error) {
+      final safe = _toPublicException(error);
+      _diagnostics.coverFetchFailed(trace, _diagnosticError(safe.code));
+      throw safe;
     }
   }
 
   @override
-  String buildLivestreamUrl(String livestreamId) {
+  String buildLivestreamUrl(String livestreamId, {required String otp}) {
+    if (otp.trim().isEmpty) {
+      _diagnostics.livestreamUrlFailed(FeedUtilDiagnosticError.invalidArgument);
+      throw const LivestreamSdkException(
+        LivestreamSdkErrorCode.invalidArgument,
+      );
+    }
     final bases = _bases;
     if (bases == null) {
-      throw StateError(
-        'domains not resolved yet — call getLivestreamList or prewarm first',
+      _diagnostics.livestreamUrlFailed(FeedUtilDiagnosticError.illegalState);
+      throw const LivestreamSdkException(LivestreamSdkErrorCode.illegalState);
+    }
+    final username = _usernameById[livestreamId];
+    if (livestreamId.isEmpty || username == null) {
+      _diagnostics.livestreamUrlFailed(FeedUtilDiagnosticError.invalidArgument);
+      throw const LivestreamSdkException(
+        LivestreamSdkErrorCode.invalidArgument,
       );
     }
     final url = composeLivestreamUrl(
       frontend: bases.frontend,
-      livestreamId: livestreamId,
+      username: username,
+      otp: otp,
       remoteConfigOverrides: bases.remoteConfigOverrides,
     );
-    // Log the exact link handed to the host (QA field finding 2026-07-14:
-    // a malformed/config-less link is invisible without this). Unlike the
-    // resolve logs, the override *values* do appear here — they are part of
-    // the URL itself, which the host receives anyway.
-    _log.info('buildLivestreamUrl: $url');
+    _diagnostics.livestreamUrlBuilt(usedCachedUsername: true);
     return url;
   }
 
+  @override
+  void reportWebViewEvent(WebViewLogEvent event) {
+    switch (event.type) {
+      case WebViewLogEventType.pageStarted:
+        _diagnostics.webViewLifecycle(
+          started: true,
+          isForMainFrame: event.isForMainFrame,
+        );
+        break;
+      case WebViewLogEventType.pageFinished:
+        _diagnostics.webViewLifecycle(
+          started: false,
+          isForMainFrame: event.isForMainFrame,
+        );
+        break;
+      case WebViewLogEventType.httpError:
+        _diagnostics.webViewHttpError(
+          statusCode: event.statusCode,
+          isForMainFrame: event.isForMainFrame,
+        );
+        break;
+      case WebViewLogEventType.networkError:
+        _diagnostics.webViewNetworkError(
+          category: event.errorType ?? WebViewNetworkErrorType.unknown,
+          errorCode: event.errorCode,
+          isForMainFrame: event.isForMainFrame,
+        );
+        break;
+    }
+  }
+
   /// Composes the full livestream web-view URL (spec §06 + QA finding
-  /// 2026-07-14): `{frontendBase}/user/{id}/livestream?{query}` where the
+  /// 2026-07-17): `{frontendBase}/u/{username}/livestream?{query}` where the
   /// query carries the tracker's remote-config overrides — without them the
   /// web frontend loads against its default (blocked) domains and the page
   /// fails to open in the field.
   ///
-  /// The id is encoded: ? / # or / inside it would otherwise be read by
+  /// The username is encoded: ? / # or / inside it would otherwise be read by
   /// Uri.resolve as query/fragment/path separators and corrupt the URL.
   static String composeLivestreamUrl({
     required Uri frontend,
-    required String livestreamId,
+    required String username,
+    required String otp,
     required Map<String, String> remoteConfigOverrides,
   }) {
     final base = frontend
-        .resolve('user/')
-        .resolve('${Uri.encodeComponent(livestreamId)}/')
+        .resolve('u/')
+        .resolve('${Uri.encodeComponent(username)}/')
         .resolve('livestream');
-    final query = buildLivestreamWebQuery(remoteConfigOverrides);
-    return query.isEmpty ? '$base' : '$base?$query';
+    final environmentQuery = buildLivestreamWebQuery(remoteConfigOverrides);
+    final configSuffix = environmentQuery.substring(_mdmQuery.length);
+    final query =
+        '$_mdmQuery&otp=${Uri.encodeQueryComponent(otp)}$configSuffix';
+    return '$base?$query';
   }
+
+  static const String _mdmQuery = 'mdm=1';
 
   /// Builds the query string the livestream web page expects: the required
   /// `mdm=1` flag, then one repeated `config` param per tracker remote-config
-  /// override, each valued `KEY:::VALUE`. Never empty.
+  /// override, each valued `KEY:::VALUE`. Never empty. The query deliberately
+  /// stays OTP-free so native facades can cache it and append a fresh OTP for
+  /// each room open.
   ///
   /// Values are form-encoded ([Uri.encodeQueryComponent]: space → `+`), then
   /// `:` `/` `,` are restored — they are legal in a query per RFC 3986 and the
@@ -494,9 +590,10 @@ class LivestreamSdkImpl implements LivestreamSdk {
   static String buildLivestreamWebQuery(
     Map<String, String> remoteConfigOverrides,
   ) {
-    // mdm=1 is required for the web page to function (QA finding 2026-07-15);
-    // otp is deliberately NOT sent.
-    final buffer = StringBuffer('mdm=1');
+    // mdm=1 is required for the web page to function (QA finding 2026-07-15).
+    // Identity is carried by the per-open OTP in composeLivestreamUrl, not by
+    // this cacheable environment query.
+    final buffer = StringBuffer(_mdmQuery);
     for (final entry in remoteConfigOverrides.entries) {
       buffer
         ..write('&config=')
@@ -508,10 +605,6 @@ class LivestreamSdkImpl implements LivestreamSdk {
   static String _encodeWebQueryValue(String value) => Uri.encodeQueryComponent(
     value,
   ).replaceAll('%3A', ':').replaceAll('%2F', '/').replaceAll('%2C', ',');
-
-  @override
-  void setLogListener(FeedUtilLogCallback? listener) =>
-      FeedUtilLog.instance.setCallback(listener);
 
   /// Lazy, cached, single-flight domain resolution (Feature 1).
   Future<_ResolvedBases> _resolveBases() {
@@ -540,34 +633,27 @@ class LivestreamSdkImpl implements LivestreamSdk {
   /// checkHealth() over the config servers, fetch + group resources, race
   /// checkResourceHealth() per priority group, return the api/frontend bases.
   Future<_ResolvedBases> _runResolve() async {
-    _log.info(
-      'domain resolve: start (${_config.trackerServers.length} tracker '
-      'server(s), labels=${_config.trackerLabels ?? 'none'})',
+    final trace = _diagnostics.startTrace();
+    _diagnostics.domainResolveStarted(
+      trace,
+      candidates: _config.trackerServers.length,
     );
     final tracker = sdk_core.DomainTracker(
       trackerServers: _config.trackerServers.map(_serverUriOf).toList(),
       resourceLabels: _config.trackerLabels,
       repositoryFactory: (host) =>
           sdk_core.DioDomainTrackerRepository(host: host, httpClient: _http),
-      // Surface the tracker pipeline's own stage logs (server health race,
-      // per-resource latency, best-resource selection, remote-config overrides)
-      // through the SDK-wide FeedUtilLog fan-out. Without this the core defaults
-      // to NoopDomainTrackerLogger and every stage is dropped.
-      logger: const FeedUtilDomainTrackerLogger(),
+      // The adapter discards all human-readable core messages and forwards
+      // only fixed signal categories.
+      logger: FeedUtilDomainTrackerLogger(_diagnostics),
     );
 
     try {
       final resolved = await tracker.resolve();
-      _log.info(
-        'domain resolve: success (api=${resolved.api}, '
-        'frontend=${resolved.frontend})',
-      );
-      // Full resolved result. Override *values* are withheld — they include
-      // PUBLIC_URL_ENCRYPT_KEYS (AES keys) — so only the key names are logged.
-      _log.debug(
-        'domain resolve: resolved resources=${resolved.uris}, '
-        'frontendChanged=${resolved.isFrontendChanged}, '
-        'remoteConfigKeys=${resolved.remoteConfigOverrides.keys}',
+      _diagnostics.domainResolveCompleted(
+        trace,
+        resourceCount: resolved.uris.length,
+        frontendChanged: resolved.isFrontendChanged,
       );
 
       // Apply any AES key rotation the tracker publishes alongside the domains.
@@ -578,9 +664,9 @@ class LivestreamSdkImpl implements LivestreamSdk {
       // the built-in defaults so the out-of-the-box key never regresses.
       // Only on a client we own; an injected one is left untouched (B1).
       if (_ownsHttpClient) {
-        final encryptKeys = _parseEncryptKeys(
-          resolved.remoteConfigOverrides[_publicUrlEncryptKeysConfigKey],
-        );
+        final rawEncryptKeys =
+            resolved.remoteConfigOverrides[_publicUrlEncryptKeysConfigKey];
+        final encryptKeys = _parseEncryptKeys(rawEncryptKeys);
         if (encryptKeys.isNotEmpty) {
           _http.transformer = sdk_core.AesDecryptFusedTransformer(
             encryptKeys: {
@@ -588,6 +674,9 @@ class LivestreamSdkImpl implements LivestreamSdk {
               ...encryptKeys,
             },
           );
+          _diagnostics.encryptionConfigApplied(keyCount: encryptKeys.length);
+        } else if (rawEncryptKeys != null && rawEncryptKeys.isNotEmpty) {
+          _diagnostics.encryptionConfigIgnored();
         }
       }
 
@@ -604,27 +693,26 @@ class LivestreamSdkImpl implements LivestreamSdk {
         publicBase: resolved.uris[_publicResourceType],
         encryptedPublicBase: resolved.uris[_encryptedPublicResourceType],
       );
-    } on sdk_core.DomainTrackerServerNotFoundException catch (e) {
-      _log.error('domain resolve: no tracker server reachable — ${e.message}');
-      // Translate to the exception type declared on the LivestreamSdk
-      // interface (mapped to PlatformException
-      // 'domain_tracker_server_not_found' by the channel layer).
-      throw DomainTrackerServerNotFoundException(
-        e.message.isEmpty ? null : e.message,
+    } on sdk_core.DomainTrackerServerNotFoundException {
+      _diagnostics.domainResolveFailed(
+        trace,
+        FeedUtilDiagnosticError.domainUnreachable,
       );
-    } on sdk_core.HealthyResourceNotFoundException catch (e) {
-      // Logged then rethrown unchanged — steps 2–3: resources exist but none
-      // healthy / required types missing. The channel layer maps it to a
-      // generic error code (B2 decides the mapping — the LivestreamSdk
-      // interface deliberately only declares the server-not-found case).
-      _log.error(
-        'domain resolve: no healthy resource '
-        '(types=${e.resourceTypes}) — ${e.message}',
+      throw const LivestreamSdkException(
+        LivestreamSdkErrorCode.domainUnreachable,
       );
-      rethrow;
-    } catch (e) {
-      _log.error('domain resolve: unexpected failure — $e');
-      rethrow;
+    } on sdk_core.HealthyResourceNotFoundException {
+      _diagnostics.domainResolveFailed(
+        trace,
+        FeedUtilDiagnosticError.domainUnreachable,
+      );
+      throw const LivestreamSdkException(
+        LivestreamSdkErrorCode.domainUnreachable,
+      );
+    } on Object catch (error) {
+      final safe = _toPublicException(error);
+      _diagnostics.domainResolveFailed(trace, _diagnosticError(safe.code));
+      throw safe;
     }
   }
 
@@ -669,16 +757,93 @@ class LivestreamSdkImpl implements LivestreamSdk {
   /// silently skip Bearer-token attachment.
   static String _hostOf(String server) => _serverUriOf(server).host;
 
-  static Dio _defaultHttpClient(LivestreamSdkConfig config) {
+  static LivestreamSdkException _toPublicException(Object error) {
+    if (error is LivestreamSdkException) return error;
+    if (error is DioException) {
+      final code = switch (error.type) {
+        DioExceptionType.connectionTimeout ||
+        DioExceptionType.sendTimeout ||
+        DioExceptionType.receiveTimeout =>
+          LivestreamSdkErrorCode.networkTimeout,
+        _ => LivestreamSdkErrorCode.networkFailure,
+      };
+      return LivestreamSdkException(code);
+    }
+    if (error is FormatException) {
+      return const LivestreamSdkException(LivestreamSdkErrorCode.badResponse);
+    }
+    if (error is StateError) {
+      return const LivestreamSdkException(LivestreamSdkErrorCode.illegalState);
+    }
+    return const LivestreamSdkException(LivestreamSdkErrorCode.internalFailure);
+  }
+
+  static FeedUtilDiagnosticError _diagnosticError(
+    LivestreamSdkErrorCode code,
+  ) => switch (code) {
+    LivestreamSdkErrorCode.invalidArgument =>
+      FeedUtilDiagnosticError.invalidArgument,
+    LivestreamSdkErrorCode.illegalState => FeedUtilDiagnosticError.illegalState,
+    LivestreamSdkErrorCode.domainUnreachable =>
+      FeedUtilDiagnosticError.domainUnreachable,
+    LivestreamSdkErrorCode.networkTimeout =>
+      FeedUtilDiagnosticError.networkTimeout,
+    LivestreamSdkErrorCode.networkFailure =>
+      FeedUtilDiagnosticError.networkFailure,
+    LivestreamSdkErrorCode.badResponse => FeedUtilDiagnosticError.badResponse,
+    LivestreamSdkErrorCode.decryptionFailure =>
+      FeedUtilDiagnosticError.decryptionFailure,
+    LivestreamSdkErrorCode.internalFailure =>
+      FeedUtilDiagnosticError.internalFailure,
+  };
+
+  /// Upper bound on TCP + TLS setup for every request the default client
+  /// makes. Without it a host that silently drops packets (as opposed to
+  /// resetting the handshake) holds the request until the OS gives up — about
+  /// two minutes on Android — and the config-server race, resource fetch and
+  /// feed calls all stall behind it. Generous on purpose: high-latency exits
+  /// (e.g. UAE) measured 1.6–2.5 s per round trip, so a handshake can
+  /// legitimately take several seconds.
+  @visibleForTesting
+  static const Duration defaultConnectTimeout = Duration(seconds: 10);
+
+  /// Longest silence tolerated while receiving one response: the wait for
+  /// headers (Dio's own receiveTimeout) and, via [BodyStallTimeoutAdapter],
+  /// the gap between two body chunks. A slow-but-flowing cover download or
+  /// feed page is never cut off — only a dead stall is.
+  @visibleForTesting
+  static const Duration defaultReceiveTimeout = Duration(seconds: 30);
+
+  /// Builds the Dio client the SDK uses when the host injects none.
+  /// Exposed for tests only; consumers configure via [LivestreamSdkConfig].
+  @visibleForTesting
+  static Dio defaultHttpClient(LivestreamSdkConfig config) {
     final token = config.trackerAuthToken ?? _builtInTrackerAuthToken;
     final trackerHosts = config.trackerServers.map(_hostOf).toSet();
-    return Dio()
+    return Dio(
+        BaseOptions(
+          connectTimeout: defaultConnectTimeout,
+          receiveTimeout: defaultReceiveTimeout,
+        ),
+      )
+      // Dio's receiveTimeout stops at the response headers; this also bounds
+      // silence inside the body (per chunk), so a host that answers and then
+      // stalls mid-response fails instead of hanging.
+      ..httpClientAdapter = BodyStallTimeoutAdapter(IOHttpClientAdapter())
       // Transparently AES-decrypts any response whose X-Encrypted-* headers
       // say so (cover images), and behaves like the default transformer for
       // all plain traffic (tracker health checks, feed JSON) — so it's safe as
       // the single transformer for every request this client makes.
       ..transformer = sdk_core.AesDecryptFusedTransformer()
       ..interceptors.addAll([
+        // First in the chain: the core's tracker + feed calls are bare
+        // RequestOptions through fetch(), which never sees BaseOptions above.
+        // Verified on an emulator against a host that accepts TCP and then
+        // goes silent: without this the resolve hangs indefinitely.
+        const RequestTimeoutsInterceptor(
+          connectTimeout: defaultConnectTimeout,
+          receiveTimeout: defaultReceiveTimeout,
+        ),
         // rtt/ttfb measurement for the tracker health checks.
         sdk_core.TimeProfilingInterceptor(),
         // Bearer auth only toward tracker servers.
@@ -714,17 +879,31 @@ class _ResolvedBases {
   final Uri? encryptedPublicBase;
 }
 
-/// The paging state the SDK encodes inside the opaque [PageToken]: the
-/// already-resolved real feed path plus the next page number. Keeping the
-/// resolved path here means paging never re-runs the feed-path redirect.
+/// The paging state encoded inside the opaque [PageToken]: the config feed
+/// path, next page number, and ids already returned to the host. Carrying ids
+/// in the token preserves de-duplication after SDK recreation without global
+/// state. The resolved redirect target is never stored because it can expire.
 class _FeedCursor {
-  const _FeedCursor({required this.feedPath, required this.page});
+  const _FeedCursor({
+    required this.feedPath,
+    required this.page,
+    this.seenIds = const [],
+  });
 
   final String feedPath;
   final int page;
+  final List<String> seenIds;
 
   PageToken encode() => PageToken(
-    base64Url.encode(utf8.encode(jsonEncode({'p': feedPath, 'n': page}))),
+    base64Url.encode(
+      utf8.encode(
+        jsonEncode({
+          'p': feedPath,
+          'n': page,
+          if (seenIds.isNotEmpty) 's': seenIds,
+        }),
+      ),
+    ),
   );
 
   /// Decodes a [PageToken] previously produced by [encode].
@@ -740,7 +919,13 @@ class _FeedCursor {
               as Map<String, dynamic>;
       final feedPath = decoded['p'] as String;
       final page = (decoded['n'] as num).toInt();
-      return _FeedCursor(feedPath: feedPath, page: page);
+      final seenIds = switch (decoded['s']) {
+        null => const <String>[],
+        final List<dynamic> values =>
+          values.map((value) => value as String).toList(growable: false),
+        _ => throw const FormatException('Invalid seen ids'),
+      };
+      return _FeedCursor(feedPath: feedPath, page: page, seenIds: seenIds);
     } catch (_) {
       throw const FormatException(
         'Invalid or unrecognized livestream feed PageToken',

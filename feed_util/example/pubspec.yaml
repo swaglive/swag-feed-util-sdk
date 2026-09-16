@@ -5,9 +5,7 @@ description: 'Example external Flutter app consuming the feed_util Livestream SD
 publish_to: 'none'
 version: 1.0.0+1
 
-# Part of the swag-flutter-user pub workspace (root pubspec `workspace:` list),
-# so `feed_util: any` resolves to the local module. A real external consumer
-# instead uses a git or published dependency — see feed_util/INTEGRATION.md.
+# Standalone release example.
 
 environment:
   sdk: ^3.8.0
@@ -17,12 +15,12 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
 
-  # The SDK under test, resolved to the local workspace member.
+  # The SDK under test, resolved from the sibling source package.
   feed_util:
     path: ../
 
   # In-app browser for the livestream web page a tapped card opens.
-  webview_flutter: ^4.10.0
+  webview_flutter: ^4.13.0
   webview_flutter_wkwebview: ^3.18.0
 
 dev_dependencies:

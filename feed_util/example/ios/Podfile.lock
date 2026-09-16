@@ -1,5 +1,7 @@
 PODS:
   - Flutter (1.0.0)
+  - share_plus (0.0.1):
+    - Flutter
   - webcrypto (0.1.1):
     - Flutter
     - FlutterMacOS
@@ -9,12 +11,15 @@ PODS:
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
+  - share_plus (from `.symlinks/plugins/share_plus/ios`)
   - webcrypto (from `.symlinks/plugins/webcrypto/darwin`)
   - webview_flutter_wkwebview (from `.symlinks/plugins/webview_flutter_wkwebview/darwin`)
 
 EXTERNAL SOURCES:
   Flutter:
     :path: Flutter
+  share_plus:
+    :path: ".symlinks/plugins/share_plus/ios"
   webcrypto:
     :path: ".symlinks/plugins/webcrypto/darwin"
   webview_flutter_wkwebview:
@@ -22,6 +27,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  share_plus: de6030e33b4e106470e09322d87cf2a4258d2d1d
   webcrypto: a5f5eb3e375cf0a99993e207e97cdcab5c94ce2e
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
 

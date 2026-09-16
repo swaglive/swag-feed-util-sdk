@@ -74,31 +74,6 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
   static const _includeLivestreamDetail = 'livestream_detail';
 
   @override
-  Future<String?> resolveFeedPath(
-    String configPath, {
-    CancelToken? cancelToken,
-  }) async {
-    final source = Uri.parse(configPath);
-    final uri = _buildUri(
-      normalizeLivestreamFeedPath(source.path),
-      _multiValueQuery(source.queryParametersAll),
-    );
-    final response = await _http.fetch<void>(
-      RequestOptions(
-        path: uri.toString(),
-        method: 'GET',
-        cancelToken: cancelToken,
-        followRedirects: false,
-        // Accept 3xx so the redirect Location can be read from the headers.
-        validateStatus: (status) =>
-            status != null && status >= 200 && status < 400,
-      ),
-    );
-    final location = response.headers.value('location');
-    return (location == null || location.isEmpty) ? null : location;
-  }
-
-  @override
   Future<List<Livestream>> getLivestreamList({
     required String feedPath,
     String? sorting,
@@ -124,6 +99,8 @@ final class DioLivestreamFeedRepository implements LivestreamFeedRepository {
           path: uri.toString(),
           method: 'GET',
           cancelToken: cancelToken,
+          // Follow the feed 302 per fetch; a captured Location goes stale.
+          followRedirects: true,
         ),
       );
       // Emitted before shape validation/mapping so a malformed body (or an

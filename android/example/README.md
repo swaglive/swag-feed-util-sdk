@@ -1,42 +1,78 @@
-# FeedUtilExample (Android)
+# FeedUtil native Android example
 
-Native **Java** host app (matching the Android integrator) embedding the
-`feed_util` Flutter module via prebuilt AARs. App code (`ExampleApp.java`,
-`MainActivity.java`) is Java; it calls the `FeedUtil` facade, which is Kotlin
-but exposed `@JvmStatic` so Java calls `FeedUtil.start(ctx)` /
-`FeedUtil.invoke(...)` directly. The build compiles
-`native/android/feed-util/src/main/kotlin` directly (the wrapper stays
-single-sourced) and pulls
-`com.example.feed_util:flutter_debug|flutter_release:1.0` from the module's
-local Maven repo.
+Standalone Java host that consumes the committed `FeedUtil` facade AAR. The
+facade owns the headless Flutter engine and exposes typed Java callbacks, so
+the application does not use MethodChannel or parse maps directly.
 
-## Build & run
+The example demonstrates:
 
-```sh
-# 1. Build the module AARs (from apps/feed_util)
-flutter build aar
+- readiness-safe, idempotent SDK initialization;
+- supplying tracker configuration at runtime through the Java callback API;
+- fetching and paginating typed `LivestreamPage` results;
+- pull-to-refresh and a two-column card grid;
+- lazy cover decoding away from the UI thread;
+- sanitized SDK console diagnostics;
+- requesting a development OTP on every card tap and opening the one-use
+  SDK-built URL in an Android WebView.
 
-# 2. Build/run the example (from examples/android)
-./gradlew :app:installDebug  && adb shell am start -n live.swag.feedutil.example/.MainActivity
+## Prerequisites
+
+- JDK 17 or newer (Android Studio's bundled JDK is suitable);
+- Android SDK 36;
+- an API 24 or newer emulator/device;
+- an auth token from Swag, if the target environment requires one.
+
+Create `local.properties` in this directory. It is gitignored:
+
+```properties
+sdk.dir=/absolute/path/to/your/Android/sdk
+feedUtilTrackerAuthToken=<token-from-Swag>
 ```
 
-Or open `examples/android` in Android Studio and run `app`.
+The token becomes a `BuildConfig` value and is passed to
+`LivestreamSdkConfig`; it is not baked into the AAR. Omit the token line when
+Swag did not provide one for the environment.
 
-## Notes
+## Build and run
 
-- Repositories are wired in `settings.gradle.kts`:
-  `../../build/host/outputs/repo` (module AARs) +
-  `download.flutter.io` (Flutter engine artifacts).
-- Rerun `flutter build aar` after any Dart change — the AARs are snapshots,
-  not live source.
-- The app warms the engine in `ExampleApp` (`FeedUtil.start(this)`), then
-  `MainActivity` calls `configure` + `getLivestreamList("user_livestream-v2")`
-  over the channel and renders the returned items as a card grid (title,
-  streamer, viewers, score, status). Cover images are placeholders until
-  `getCoverImage` lands (WS-B/B6); tapping a card toasts its web-view URL.
-- **Real data needs the tracker auth token** baked into the AAR:
-  `cd ../.. && flutter build aar --dart-define=FEED_UTIL_TRACKER_AUTH_TOKEN=YOUR_TOKEN`
-  (rerun before installing). Without it the tracker can't resolve.
-- Versions: **AGP 8.10.1** (kept below the `.android` host's 8.11.1 so it syncs
-  in Android Studio releases that cap at AGP 8.10.x; bump when AS catches up),
-  Kotlin 2.2.20, Gradle 8.14, compile/target SDK 36, min SDK 24.
+```sh
+cd android/example
+./gradlew :app:assembleDebug
+./gradlew :app:installDebug
+```
+
+You can also open `android/example` in Android Studio and run the `app`
+configuration.
+
+No Flutter build is required. `settings.gradle.kts` reads the already published
+artifacts from the sibling `../aar-repo` and the Flutter engine repository.
+Editing `feed_util` Dart source therefore does not change what this example
+runs; use a newer published release to test a different AAR.
+
+The card-tap dialog is development-only. Paste a fresh test OTP supplied via
+the backend team's convenience flow. A production host fetches one from its
+own server on each tap; it never places the affiliate signing key on the
+device or implements the signed server-to-server exchange in mobile code.
+
+## Code tour
+
+- [`MainActivity.java`](app/src/main/java/live/swag/feedutil/example/MainActivity.java)
+  initializes the SDK, loads pages and covers, and renders cards. Re-created
+  activities may safely repeat `initialize` with the same config.
+- [`WebViewActivity.java`](app/src/main/java/live/swag/feedutil/example/WebViewActivity.java)
+  loads the watch URL unchanged and reports lifecycle plus controlled
+  HTTP/network/TLS failure categories through sanitized diagnostics.
+- [`app/build.gradle.kts`](app/build.gradle.kts) reads the local token and adds
+  the single `live.swag.feedutil:feed-util:1.0` dependency.
+- [`settings.gradle.kts`](settings.gradle.kts) configures the local Maven
+  repository and Flutter engine artifacts.
+
+The host manifest explicitly declares `android.permission.INTERNET`. Omitting
+it is a common cause of `domain_unreachable` in release hosts.
+The example sets `debugMode` in `LivestreamSdkConfig`; filter Logcat by
+`FeedUtil` and inspect the structured `event=webview.*` entries when a
+livestream page is blank, returns 404, or cannot connect. No diagnostic data is
+stored or exported by the SDK or example.
+
+For remote Maven integration in another application, see the
+[Android integration guide](../../docs/android-integration.md).

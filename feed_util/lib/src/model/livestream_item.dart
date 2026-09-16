@@ -76,7 +76,7 @@ class LivestreamItem {
   /// this only if you need something beyond those.
   final List<String> badges;
 
-  /// The streamer's country code (e.g. `jp`) for a flag icon, when known.
+  /// The streamer's country rendered as a flag emoji, when known.
   final String? countryFlag;
 
   /// Badge flag: VIP-sponsored streamer.

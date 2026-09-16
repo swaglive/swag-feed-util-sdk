@@ -11,8 +11,7 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // Local Maven repo produced by `flutter build aar` (run it from
-        // apps/feed_util first).
+        // Maven repository bundled with this release.
         maven(url = file("../aar-repo"))
         // Flutter engine artifacts referenced by the AAR poms.
         maven(url = "https://storage.googleapis.com/download.flutter.io")

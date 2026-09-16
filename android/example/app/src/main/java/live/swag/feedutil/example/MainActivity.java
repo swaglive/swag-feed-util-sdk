@@ -1,6 +1,7 @@
 package live.swag.feedutil.example;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -14,6 +15,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.GridLayout;
 import android.widget.ImageView;
@@ -96,8 +98,8 @@ public class MainActivity extends Activity {
 
         swipe = new SwipeRefreshLayout(this);
         swipe.addView(scroll);
-        // Pull-to-refresh reloads page 1 (null token = fresh, replaces the grid).
-        swipe.setOnRefreshListener(() -> loadFeed(null));
+        // Pull-to-refresh reloads page 1 and explicitly bypasses edge caches.
+        swipe.setOnRefreshListener(() -> loadFeed(null, true));
 
         statusView = new TextView(this);
         statusView.setText("Loading " + FEED_ID + " …");
@@ -115,7 +117,7 @@ public class MainActivity extends Activity {
         DisplayMetrics metrics = getResources().getDisplayMetrics();
         cellWidth = (metrics.widthPixels - dp(24)) / 2;
 
-        configureThenLoad();
+        initializeThenLoad();
     }
 
     @Override
@@ -126,19 +128,21 @@ public class MainActivity extends Activity {
 
     // --- SDK calls via the typed FeedUtil API ---------------------------------
 
-    private void configureThenLoad() {
+    private void initializeThenLoad() {
         // Runtime tracker token (the AAR bakes none) — from local.properties via
         // BuildConfig. Omitted when empty so a misconfigured build fails loudly
-        // as domain_tracker_server_not_found rather than sending a blank token.
-        LivestreamSdkConfig config = BuildConfig.TRACKER_AUTH_TOKEN.isEmpty()
-                ? new LivestreamSdkConfig(TRACKER_SERVERS)
-                : new LivestreamSdkConfig(TRACKER_SERVERS, BuildConfig.TRACKER_AUTH_TOKEN);
-        FeedUtil.configure(config, new CompletionCallback() {
-            @Override public void onSuccess() { loadFeed(null); }
+        // as domain_unreachable rather than sending a blank token.
+        LivestreamSdkConfig config = new LivestreamSdkConfig(
+                TRACKER_SERVERS,
+                BuildConfig.TRACKER_AUTH_TOKEN.isEmpty()
+                        ? null
+                        : BuildConfig.TRACKER_AUTH_TOKEN,
+                null,
+                true);
+        FeedUtil.initialize(this, config, new CompletionCallback() {
+            @Override public void onSuccess() { loadFeed(null, false); }
             @Override public void onError(FeedUtilException e) {
-                // configure is call-once; a re-created Activity is fine to proceed.
-                if ("already_configured".equals(e.getCode())) loadFeed(null);
-                else fail(e.getCode() + ": " + e.getMessage());
+                fail(e, MainActivity.this::initializeThenLoad);
             }
         });
     }
@@ -147,19 +151,34 @@ public class MainActivity extends Activity {
      * Fetches one feed page. {@code pageToken == null} loads page 1 and replaces
      * the grid; a non-null token appends the next page (load-more).
      */
-    private void loadFeed(final String pageToken) {
+    private void loadFeed(final String pageToken, final boolean bustCache) {
         final boolean append = pageToken != null;
+        if (!append) {
+            statusView.setOnClickListener(null);
+            statusView.setClickable(false);
+            if (grid.getChildCount() == 0) {
+                statusView.setVisibility(View.VISIBLE);
+                statusView.setText("Loading " + FEED_ID + " …");
+            }
+        }
         ResultCallback<LivestreamPage> callback = new ResultCallback<LivestreamPage>() {
             @Override public void onSuccess(LivestreamPage page) { onFeed(page, append); }
             @Override public void onError(FeedUtilException e) {
-                fail(e.getCode() + ": " + e.getMessage());
+                swipe.setRefreshing(false);
+                loadingMore = false;
+                if (append) {
+                    Toast.makeText(
+                            MainActivity.this,
+                            e.isRetryable()
+                                    ? "Could not load more. Scroll to retry."
+                                    : e.getWireCode() + ": " + e.getMessage(),
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    fail(e, () -> loadFeed(null, bustCache));
+                }
             }
         };
-        if (append) {
-            FeedUtil.getLivestreamList(FEED_ID, pageToken, callback);
-        } else {
-            FeedUtil.getLivestreamList(FEED_ID, callback);
-        }
+        FeedUtil.getLivestreamList(FEED_ID, pageToken, bustCache, callback);
     }
 
     /** Loads the next page once the user scrolls within one screen of the end. */
@@ -170,7 +189,7 @@ public class MainActivity extends Activity {
         int remaining = content.getBottom() - (scroll.getScrollY() + scroll.getHeight());
         if (remaining <= scroll.getHeight()) {
             loadingMore = true;
-            loadFeed(nextToken);
+            loadFeed(nextToken, false);
         }
     }
 
@@ -180,6 +199,8 @@ public class MainActivity extends Activity {
         nextToken = page.getNextToken();
 
         List<LivestreamItem> items = page.getItems();
+        statusView.setOnClickListener(null);
+        statusView.setClickable(false);
         if (items.isEmpty()) {
             if (!append) {
                 statusView.setVisibility(View.VISIBLE);
@@ -195,11 +216,16 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void fail(String message) {
+    private void fail(FeedUtilException error, Runnable retry) {
         swipe.setRefreshing(false);
         loadingMore = false;
         statusView.setVisibility(View.VISIBLE);
-        statusView.setText("Error: " + message);
+        statusView.setText(
+                "Error: " + error.getWireCode() + ": " + error.getMessage()
+                        + (error.isRetryable() ? "\n\nTap to retry" : ""));
+        statusView.setClickable(error.isRetryable());
+        statusView.setOnClickListener(
+                error.isRetryable() ? ignored -> retry.run() : null);
     }
 
     // --- Card view ------------------------------------------------------------
@@ -289,7 +315,22 @@ public class MainActivity extends Activity {
      * {@code mediaPlaybackRequiresUserGesture = false} and let the stream autoplay.
      */
     private void openUrl(String id) {
-        FeedUtil.buildLivestreamUrl(id, new ResultCallback<String>() {
+        EditText otpInput = new EditText(this);
+        otpInput.setHint("Single-use OTP");
+        otpInput.setSingleLine(true);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Paste development OTP")
+                .setView(otpInput)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Open", (dialog, which) ->
+                        openUrlWithOtp(id, otpInput.getText().toString()))
+                .show();
+    }
+
+    /** Development-only input seam; production hosts fetch OTP on each tap. */
+    private void openUrlWithOtp(String id, String otp) {
+        FeedUtil.buildLivestreamUrl(id, otp, new ResultCallback<String>() {
             @Override public void onSuccess(String url) {
                 Intent intent = new Intent(MainActivity.this, WebViewActivity.class);
                 intent.putExtra(WebViewActivity.EXTRA_URL, url);

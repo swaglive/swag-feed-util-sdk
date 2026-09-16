@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required in the main manifest for release builds; the debug manifest's
+         grant only covers debug/profile. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="FeedUtil Flutter"
         android:name="${applicationName}"

@@ -37,7 +37,7 @@ dependencies:
   dio: ^5.8.0+1 # HTTP: domain tracker health checks + feed API
   # HTTP cache for cover images (MemCacheStore = in-memory only, so decrypted
   # plaintext never hits disk per spec §03). Pure Dart, no native code; version
-  # matches packages/core to keep the pub workspace on one resolution.
+  # matches livestream_sdk_core to keep one compatible dependency resolution.
   dio_cache_interceptor: ^3.5.0
   webcrypto: ^0.5.8 # AES cover-image decryption (reused Dart transformer)
   async: ^2.13.0 # race/timeout combinators for the tracker algorithm
